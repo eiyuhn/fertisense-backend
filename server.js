@@ -6,9 +6,9 @@ const cors = require('cors');
 
 const authRoutes = require('./routes/auth');
 const readingRoutes = require('./routes/readings');
-const adminRoutes = require('./routes/admin'); // <-- make sure this file exists
+const adminRoutes = require('./routes/admin');
 
-// fail fast if env is missing (optional but helpful)
+// (optional) fail fast if env missing
 ['MONGODB_URI', 'JWT_SECRET'].forEach(k => {
   if (!process.env[k]) {
     console.error(`Missing env: ${k}`);
@@ -28,9 +28,9 @@ mongoose.connect(process.env.MONGODB_URI)
   });
 
 app.get('/', (_, res) => res.send('Fertisense API up'));
-app.use('/api/auth', authRoutes);
+app.use('/api/auth', authRoutes);      // public login/register, protected /me
 app.use('/api/readings', readingRoutes);
-app.use('/api/admin', adminRoutes); // <-- mounts /api/admin/*
+app.use('/api/admin', adminRoutes);    // protected by auth+admin inside routes/admin.js
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', message: 'Fertisense API is running' });
