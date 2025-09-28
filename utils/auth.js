@@ -1,3 +1,4 @@
+// fertisense-backend/fertisense-backend/utils/auth.js
 const jwt = require('jsonwebtoken');
 
 function auth(req, res, next) {
@@ -13,4 +14,13 @@ function auth(req, res, next) {
   }
 }
 
-module.exports = { auth };
+function requireRole(role) {
+  return (req, res, next) => {
+    if (!req.user || req.user.role !== role) {
+      return res.status(403).json({ error: 'Forbidden: admin only' });
+    }
+    next();
+  };
+}
+
+module.exports = { auth, requireRole };

@@ -5,7 +5,9 @@
   "type": "commonjs",
   "scripts": {
     "dev": "nodemon server.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "seed:admin": "node scripts/seed-admin.js admin@example.com admin123",
+    "seed:user": "node scripts/seed-user.js user@example.com user123"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
@@ -13,7 +15,8 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.5.1"
+    "mongoose": "^8.5.1",
+    "yet": "^0.1.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.4"
