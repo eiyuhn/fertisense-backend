@@ -1,27 +1,22 @@
-// fertisense-backend/fertisense-backend/models/Farmer.js
 const mongoose = require('mongoose');
 
 const farmerSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true, trim: true },       // Pangalan ng Magsasaka
-    farmLocation: { type: String, default: '', trim: true },  // Lokasyon ng Sakahan
-    farmSizeHa: { type: Number, min: 0 },                     // Laki ng Sakahan (hectares)
-    riceType: {                                               // Uri ng Palay
-      type: String,
-      enum: ['hybrid', 'inbred', 'pareho'],
-      default: 'pareho',
-    },
-    plantingStyle: {                                          // Estilo ng Pagtatanim
-      type: String,
-      enum: ['irrigated', 'rainfed', 'pareho'],
-      default: 'pareho',
-    },
-    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // admin who created
+    // who created/owns this farmer card (usually admin user)
+    ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+
+    name: { type: String, required: true },
+    address: { type: String, default: '' },
+    farmLocation: { type: String, default: '' },
+    mobile: { type: String, default: '' },
+
+    // optional extra fields you already collect in the app
+    cropType: { type: String, enum: ['hybrid', 'inbred', 'pareho', '', null], default: '' },
+    cropStyle: { type: String, enum: ['irrigated', 'rainfed', 'pareho', '', null], default: '' },
+    landAreaHa: { type: Number, default: 0 }, // hectares, optional
+    code: { type: String, index: true },      // your generated farmer code (optional)
   },
   { timestamps: true }
 );
-
-// quick text search on name/location
-farmerSchema.index({ name: 'text', farmLocation: 'text' });
 
 module.exports = mongoose.model('Farmer', farmerSchema);

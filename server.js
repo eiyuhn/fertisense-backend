@@ -38,3 +38,24 @@ app.get('/health', (req, res) => {
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => console.log(`🚀 API listening on :${port}`));
+
+// ...existing requires
+
+// Basic request log (method + path)
+app.use((req, _res, next) => {
+  console.log(`[REQ] ${req.method} ${req.path}`);
+  next();
+});
+
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => console.log('✅ MongoDB connected:', (process.env.MONGODB_URI || '').split('@').pop()))
+  .catch(err => {
+    console.error('❌ DB error on connect:', err);
+    process.exit(1);
+  });
+
+// Optional: check mongoose connection state endpoint
+app.get('/debug/dbstate', (_req, res) => {
+  // 0=disconnected 1=connected 2=connecting 3=disconnecting
+  res.json({ state: mongoose.connection.readyState });
+});
