@@ -57,22 +57,39 @@ exports.updateAdminPrices = async (req, res) => {
           npk: { N: 0, P: 0, K: 0 },
           active: true,
         };
-        doc.items.set(code, {
+
+        // Defensive coercion to numbers (avoids string persistence)
+        const next = {
           ...current,
           ...patch,
-          npk: { ...(current.npk || {}), ...(patch.npk || {}) },
-        });
+          pricePerBag:
+            patch && patch.pricePerBag != null ? Number(patch.pricePerBag) : current.pricePerBag,
+          bagKg: patch && patch.bagKg != null ? Number(patch.bagKg) : current.bagKg,
+          npk: {
+            ...(current.npk || {}),
+            ...((patch && patch.npk) || {}),
+          },
+        };
+
+        doc.items.set(code, next);
       }
+
+      // 🔴 Critical: tell Mongoose the Map changed
+      doc.markModified('items');
     }
 
     await doc.save();
-    return res.json(sanitize(doc));
+
+    // Re-read to ensure we return persisted values
+    const fresh = await PriceSettings.findById(doc._id);
+    return res.json(sanitize(fresh));
   } catch (err) {
     console.error('[prices] updateAdminPrices error:', err);
     return res.status(500).json({ error: 'Failed to update prices' });
   }
 };
 
+// Optional helper for other controllers (e.g., recommendations)
 exports.getLatestPrices = async () => {
   const doc = await PriceSettings.ensureSeeded();
   return sanitize(doc);

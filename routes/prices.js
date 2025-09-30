@@ -1,3 +1,4 @@
+// fertisense-backend/routes/prices.js
 const express = require('express');
 const router = express.Router();
 const { auth, requireRole } = require('../utils/auth');
