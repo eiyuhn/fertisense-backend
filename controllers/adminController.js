@@ -1,7 +1,6 @@
-// fertisense-backend/controllers/adminController.js
 const Farmer = require('../models/Farmer');
 
-// Keep the response shape consistent
+/* ---------------- Utils ---------------- */
 function sanitize(f) {
   return {
     id: f._id,
@@ -19,11 +18,25 @@ function sanitize(f) {
   };
 }
 
-/* ===================== FARMERS (ADMIN) ===================== */
-// POST /api/admin/farmers
+const CROP_TYPES  = ['', 'hybrid', 'inbred', 'pareho'];
+const CROP_STYLES = ['', 'irrigated', 'rainfed', 'pareho'];
+
+function asNumber(x, def = 0) {
+  const n = Number(x);
+  return Number.isFinite(n) ? n : def;
+}
+
+function cleanCode(s) {
+  return (s || '')
+    .toString()
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9-]/g, '');
+}
+
+/* ================ FARMERS (ADMIN) ================ */
 exports.createFarmer = async (req, res) => {
   try {
-    // Debug logs (helpful while testing from the mobile app)
     console.log('[CREATE_FARMER] content-type =', req.headers['content-type']);
     console.log('[CREATE_FARMER] body =', req.body);
 
@@ -38,50 +51,83 @@ exports.createFarmer = async (req, res) => {
       code = '',
     } = req.body || {};
 
-    if (!name?.trim()) {
-      return res.status(400).json({ error: 'Name is required' });
+    const nameTrim = (name || '').trim();
+    if (!nameTrim) return res.status(400).json({ error: 'Name is required' });
+
+    const ct = CROP_TYPES.includes(cropType) ? cropType : '';
+    const cs = CROP_STYLES.includes(cropStyle) ? cropStyle : '';
+    const area = asNumber(landAreaHa, 0);
+
+    const generated = `${nameTrim.split(/\s+/)[0].toLowerCase()}-${Date.now().toString().slice(-4)}`;
+    const safeCode = cleanCode(code || generated);
+
+    if (safeCode) {
+      const exists = await Farmer.findOne({ ownerId: req.user.id, code: safeCode }).lean();
+      if (exists) return res.status(409).json({ error: 'Farmer code already exists' });
     }
 
-    const f = await Farmer.create({
-      ownerId: req.user.id, // admin creating
-      name: name.trim(),
-      address,
-      farmLocation,
-      mobile,
-      cropType,
-      cropStyle,
-      landAreaHa,
-      code,
+    const doc = await Farmer.create({
+      ownerId: req.user.id,
+      name: nameTrim,
+      address: (address || '').trim(),
+      farmLocation: (farmLocation || '').trim(),
+      mobile: (mobile || '').trim(),
+      cropType: ct,
+      cropStyle: cs,
+      landAreaHa: area,
+      code: safeCode,
     });
 
-    return res.status(201).json(sanitize(f));
+    return res.status(201).json(sanitize(doc));
   } catch (err) {
+    if (err?.code === 11000) {
+      return res.status(409).json({ error: 'Farmer code already exists' });
+    }
     console.error('Admin createFarmer error:', err);
     return res.status(500).json({ error: 'Failed to create farmer: ' + err.message });
   }
 };
 
-// GET /api/admin/farmers
 exports.listFarmers = async (req, res) => {
   const items = await Farmer.find({ ownerId: req.user.id }).sort({ createdAt: -1 });
   return res.json(items.map(sanitize));
 };
 
-// GET /api/admin/farmers/:id
 exports.getFarmer = async (req, res) => {
   const f = await Farmer.findOne({ _id: req.params.id, ownerId: req.user.id });
   if (!f) return res.status(404).json({ error: 'Not found' });
   return res.json(sanitize(f));
 };
 
-// PATCH /api/admin/farmers/:id
 exports.updateFarmer = async (req, res) => {
   const patch = {};
-  ['name','address','farmLocation','mobile','cropType','cropStyle','landAreaHa','code'].forEach(k => {
-    if (Object.prototype.hasOwnProperty.call(req.body, k)) {
-      patch[k] = req.body[k];
+  const fields = ['name','address','farmLocation','mobile','cropType','cropStyle','landAreaHa','code'];
+
+  for (const k of fields) {
+    if (!Object.prototype.hasOwnProperty.call(req.body, k)) continue;
+
+    let v = req.body[k];
+
+    if (k === 'name' || k === 'address' || k === 'farmLocation' || k === 'mobile') {
+      v = (v || '').toString().trim();
     }
-  });
+
+    if (k === 'cropType') v = CROP_TYPES.includes(v) ? v : '';
+    if (k === 'cropStyle') v = CROP_STYLES.includes(v) ? v : '';
+    if (k === 'landAreaHa') v = asNumber(v, 0);
+    if (k === 'code') v = cleanCode(v);
+
+    patch[k] = v;
+  }
+
+  if (patch.code) {
+    const dup = await Farmer.findOne({
+      ownerId: req.user.id,
+      code: patch.code,
+      _id: { $ne: req.params.id },
+    }).lean();
+    if (dup) return res.status(409).json({ error: 'Farmer code already exists' });
+  }
 
   const f = await Farmer.findOneAndUpdate(
     { _id: req.params.id, ownerId: req.user.id },
@@ -93,14 +139,13 @@ exports.updateFarmer = async (req, res) => {
   return res.json(sanitize(f));
 };
 
-// DELETE /api/admin/farmers/:id
 exports.deleteFarmer = async (req, res) => {
   const f = await Farmer.findOneAndDelete({ _id: req.params.id, ownerId: req.user.id });
   if (!f) return res.status(404).json({ error: 'Not found' });
   return res.json({ ok: true });
 };
 
-/* ======== (Stubs for the other admin routes you declared) ======== */
+/* ======== Stubs ======== */
 exports.listUsers = async (_req, res) => res.json([]);
 exports.getUser = async (_req, res) => res.status(404).json({ error: 'Not implemented' });
 exports.updateUser = async (_req, res) => res.status(404).json({ error: 'Not implemented' });
