@@ -1,6 +1,7 @@
+// fertisense-backend/controllers/adminController.js
 const Farmer = require('../models/Farmer');
 
-// shape response consistently with your other controller
+// Keep the response shape consistent
 function sanitize(f) {
   return {
     id: f._id,
@@ -22,6 +23,10 @@ function sanitize(f) {
 // POST /api/admin/farmers
 exports.createFarmer = async (req, res) => {
   try {
+    // Debug logs (helpful while testing from the mobile app)
+    console.log('[CREATE_FARMER] content-type =', req.headers['content-type']);
+    console.log('[CREATE_FARMER] body =', req.body);
+
     const {
       name,
       address = '',
@@ -33,10 +38,12 @@ exports.createFarmer = async (req, res) => {
       code = '',
     } = req.body || {};
 
-    if (!name?.trim()) return res.status(400).json({ error: 'Name is required' });
+    if (!name?.trim()) {
+      return res.status(400).json({ error: 'Name is required' });
+    }
 
     const f = await Farmer.create({
-      ownerId: req.user.id,             // <-- admin creating
+      ownerId: req.user.id, // admin creating
       name: name.trim(),
       address,
       farmLocation,
@@ -47,31 +54,33 @@ exports.createFarmer = async (req, res) => {
       code,
     });
 
-    res.status(201).json(sanitize(f));
+    return res.status(201).json(sanitize(f));
   } catch (err) {
     console.error('Admin createFarmer error:', err);
-    res.status(500).json({ error: 'Failed to create farmer: ' + err.message });
+    return res.status(500).json({ error: 'Failed to create farmer: ' + err.message });
   }
 };
 
 // GET /api/admin/farmers
 exports.listFarmers = async (req, res) => {
   const items = await Farmer.find({ ownerId: req.user.id }).sort({ createdAt: -1 });
-  res.json(items.map(sanitize));
+  return res.json(items.map(sanitize));
 };
 
 // GET /api/admin/farmers/:id
 exports.getFarmer = async (req, res) => {
   const f = await Farmer.findOne({ _id: req.params.id, ownerId: req.user.id });
   if (!f) return res.status(404).json({ error: 'Not found' });
-  res.json(sanitize(f));
+  return res.json(sanitize(f));
 };
 
 // PATCH /api/admin/farmers/:id
 exports.updateFarmer = async (req, res) => {
   const patch = {};
   ['name','address','farmLocation','mobile','cropType','cropStyle','landAreaHa','code'].forEach(k => {
-    if (k in req.body) patch[k] = req.body[k];
+    if (Object.prototype.hasOwnProperty.call(req.body, k)) {
+      patch[k] = req.body[k];
+    }
   });
 
   const f = await Farmer.findOneAndUpdate(
@@ -79,15 +88,16 @@ exports.updateFarmer = async (req, res) => {
     { $set: patch },
     { new: true }
   );
+
   if (!f) return res.status(404).json({ error: 'Not found' });
-  res.json(sanitize(f));
+  return res.json(sanitize(f));
 };
 
 // DELETE /api/admin/farmers/:id
 exports.deleteFarmer = async (req, res) => {
   const f = await Farmer.findOneAndDelete({ _id: req.params.id, ownerId: req.user.id });
   if (!f) return res.status(404).json({ error: 'Not found' });
-  res.json({ ok: true });
+  return res.json({ ok: true });
 };
 
 /* ======== (Stubs for the other admin routes you declared) ======== */

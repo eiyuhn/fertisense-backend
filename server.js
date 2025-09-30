@@ -1,14 +1,10 @@
-// fertisense-backend/server.js
 require('dotenv').config();
 const express = require('express');
-const mongoose = require('mongoose');
 const cors = require('cors');
+const mongoose = require('mongoose');
 
-const authRoutes = require('./routes/auth');
-const readingRoutes = require('./routes/readings');
-const adminRoutes = require('./routes/admin');
-
-['MONGODB_URI', 'JWT_SECRET'].forEach(k => {
+// Fail fast for critical envs (keep your version)
+['MONGODB_URI', 'JWT_SECRET'].forEach((k) => {
   if (!process.env[k]) {
     console.error(`Missing env: ${k}`);
     process.exit(1);
@@ -16,30 +12,38 @@ const adminRoutes = require('./routes/admin');
 });
 
 const app = express();
-app.use(cors());
-app.use(express.json());
 
-// Optional request logger
-app.use((req, _res, next) => {
-  console.log(`[REQ] ${req.method} ${req.path}`);
-  next();
+/* ===== Middlewares (order matters) ===== */
+app.use(cors());
+app.use(express.json()); // must be before routes
+
+/* ===== Public diagnostics (no auth) ===== */
+app.get('/health', (req, res) => {
+  res.json({
+    ok: true,
+    version: process.env.RENDER_GIT_COMMIT || 'dev',
+    time: new Date().toISOString(),
+  });
 });
 
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('✅ MongoDB connected'))
-  .catch(err => {
-    console.error('❌ DB error:', err.message);
-    process.exit(1);
-  });
+// Unprotected echo to verify JSON parsing works in prod
+app.post('/debug/echo', (req, res) => {
+  res.json({ headers: req.headers, body: req.body });
+});
 
-app.get('/', (_, res) => res.send('Fertisense API up'));
-app.use('/api/auth', authRoutes);
-app.use('/api/readings', readingRoutes);
+/* ===== Mount your routers ===== */
+const adminRoutes = require('./routes/admin');
 app.use('/api/admin', adminRoutes);
 
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', message: 'Fertisense API is running' });
-});
-
-const port = process.env.PORT || 4000;
-app.listen(port, () => console.log(`🚀 API listening on :${port}`));
+/* ===== Start ===== */
+const PORT = process.env.PORT || 3000;
+mongoose
+  .connect(process.env.MONGODB_URI)
+  .then(() => {
+    console.log('Mongo connected');
+    app.listen(PORT, () => console.log(`Listening on :${PORT}`));
+  })
+  .catch((e) => {
+    console.error('Mongo connect error:', e);
+    process.exit(1);
+  });
