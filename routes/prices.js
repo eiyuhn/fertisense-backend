@@ -1,7 +1,7 @@
 // fertisense-backend/routes/prices.js
 const express = require('express');
 const router = express.Router();
-const { auth, requireRole } = require('../middleware/auth');
+const { auth, requireRole } = require('../utils/auth'); // ✅ fixed path
 const priceCtrl = require('../controllers/priceController');
 
 // Public for stakeholders/app to read current prices
