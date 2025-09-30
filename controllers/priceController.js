@@ -41,27 +41,34 @@ exports.getAdminPrices = async (_req, res) => {
   }
 };
 
+/**
+ * Robust update: read the current doc, convert Map -> plain object,
+ * apply patches, then replace the WHOLE "items" map using findOneAndUpdate.
+ * This avoids any Mongoose Map dirty-tracking issues.
+ */
 exports.updateAdminPrices = async (req, res) => {
   try {
     const { currency, items } = req.body || {};
     const doc = await PriceSettings.ensureSeeded();
 
-    if (currency) doc.currency = currency;
+    // Convert Map -> plain object for safe merging
+    const itemsObj = Object.fromEntries(doc.items?.entries?.() || doc.items || []);
 
     if (items && typeof items === 'object') {
       for (const [code, patch] of Object.entries(items)) {
-        const current = doc.items.get(code) || {
-          label: code,
-          pricePerBag: 0,
-          bagKg: 50,
-          npk: { N: 0, P: 0, K: 0 },
-          active: true,
-        };
+        const current =
+          itemsObj[code] || {
+            label: code,
+            pricePerBag: 0,
+            bagKg: 50,
+            npk: { N: 0, P: 0, K: 0 },
+            active: true,
+          };
 
-        // Defensive coercion to numbers (avoids string persistence)
-        const next = {
+        itemsObj[code] = {
           ...current,
           ...patch,
+          // Force numeric coercion where relevant
           pricePerBag:
             patch && patch.pricePerBag != null ? Number(patch.pricePerBag) : current.pricePerBag,
           bagKg: patch && patch.bagKg != null ? Number(patch.bagKg) : current.bagKg,
@@ -69,27 +76,35 @@ exports.updateAdminPrices = async (req, res) => {
             ...(current.npk || {}),
             ...((patch && patch.npk) || {}),
           },
+          active:
+            patch && Object.prototype.hasOwnProperty.call(patch, 'active')
+              ? Boolean(patch.active)
+              : current.active,
+          label:
+            patch && Object.prototype.hasOwnProperty.call(patch, 'label')
+              ? String(patch.label)
+              : current.label,
         };
-
-        doc.items.set(code, next);
       }
-
-      // 🔴 Critical: tell Mongoose the Map changed
-      doc.markModified('items');
     }
 
-    await doc.save();
+    const setOps = { items: itemsObj };
+    if (currency) setOps.currency = String(currency);
 
-    // Re-read to ensure we return persisted values
-    const fresh = await PriceSettings.findById(doc._id);
-    return res.json(sanitize(fresh));
+    const updated = await PriceSettings.findOneAndUpdate(
+      { key: 'current' },
+      { $set: setOps },
+      { new: true, upsert: true, runValidators: true }
+    );
+
+    return res.json(sanitize(updated));
   } catch (err) {
     console.error('[prices] updateAdminPrices error:', err);
     return res.status(500).json({ error: 'Failed to update prices' });
   }
 };
 
-// Optional helper for other controllers (e.g., recommendations)
+// Optional helper
 exports.getLatestPrices = async () => {
   const doc = await PriceSettings.ensureSeeded();
   return sanitize(doc);

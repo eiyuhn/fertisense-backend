@@ -62,7 +62,6 @@ PriceSettingsSchema.statics.ensureSeeded = async function () {
           npk: { N: 18, P: 46, K: 0 },
           active: true,
         }],
-        // Optional SSP mapping if you use it in the app:
         ['SSP_0_18_0', {
           label: 'SSP 0-18-0',
           pricePerBag: 1400,
