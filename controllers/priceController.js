@@ -1,5 +1,5 @@
 // fertisense-backend/controllers/priceController.js
-const PriceSetting = require('../models/PriceSetting');
+const PriceSetting = require('../models/PriceSettings');
 
 function sanitize(doc) {
   return {

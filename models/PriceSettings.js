@@ -61,4 +61,4 @@ const PriceSettingSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model('PriceSetting', PriceSettingSchema);
+module.exports = mongoose.model('PriceSettings', PriceSettingSchema);
