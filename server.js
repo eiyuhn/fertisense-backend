@@ -37,7 +37,9 @@ app.get('/api/ping', (_req, res) => res.json({ ok: true, where: '/api' }));
 /* --- routes --- */
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
+const priceRoutes = require('./routes/prices');
 
+app.use('/api', priceRoutes);
 app.use('/api/auth', authRoutes);   // e.g. GET /api/auth/ping
 app.use('/api/admin', adminRoutes);
 
