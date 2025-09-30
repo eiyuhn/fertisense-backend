@@ -1,12 +1,12 @@
 // fertisense-backend/controllers/priceController.js
-const PriceSetting = require('../models/PriceSettings');
+const PriceSettings = require('../models/PriceSettings');
 
 function sanitize(doc) {
   return {
     id: doc._id.toString(),
     currency: doc.currency,
     items: Object.fromEntries(
-      Object.entries(doc.items || {}).map(([code, v]) => [
+      Array.from(doc.items?.entries?.() || doc.items || []).map(([code, v]) => [
         code,
         {
           label: v.label,
@@ -22,54 +22,58 @@ function sanitize(doc) {
 }
 
 exports.getPublicPrices = async (_req, res) => {
-  const doc =
-    (await PriceSetting.findOne({ key: 'current' })) ||
-    (await PriceSetting.create({ key: 'current' }));
-  return res.json(sanitize(doc));
+  try {
+    const doc = await PriceSettings.ensureSeeded();
+    return res.json(sanitize(doc));
+  } catch (err) {
+    console.error('[prices] getPublicPrices error:', err);
+    return res.status(500).json({ error: 'Failed to load prices' });
+  }
 };
 
 exports.getAdminPrices = async (_req, res) => {
-  const doc =
-    (await PriceSetting.findOne({ key: 'current' })) ||
-    (await PriceSetting.create({ key: 'current' }));
-  return res.json(sanitize(doc));
+  try {
+    const doc = await PriceSettings.ensureSeeded();
+    return res.json(sanitize(doc));
+  } catch (err) {
+    console.error('[prices] getAdminPrices error:', err);
+    return res.status(500).json({ error: 'Failed to load admin prices' });
+  }
 };
 
 exports.updateAdminPrices = async (req, res) => {
-  // Expect body: { currency?, items: { CODE: { pricePerBag?, label?, bagKg?, npk?, active? }, ... } }
-  const { currency, items } = req.body || {};
-  let doc =
-    (await PriceSetting.findOne({ key: 'current' })) ||
-    (await PriceSetting.create({ key: 'current' }));
+  try {
+    const { currency, items } = req.body || {};
+    const doc = await PriceSettings.ensureSeeded();
 
-  if (currency) doc.currency = currency;
+    if (currency) doc.currency = currency;
 
-  if (items && typeof items === 'object') {
-    // Merge fields per item (partial updates allowed)
-    for (const [code, patch] of Object.entries(items)) {
-      const current = doc.items.get(code) || {
-        label: code,
-        pricePerBag: 0,
-        bagKg: 50,
-        npk: { N: 0, P: 0, K: 0 },
-        active: true,
-      };
-      doc.items.set(code, {
-        ...current,
-        ...patch,
-        npk: { ...(current.npk || {}), ...(patch.npk || {}) },
-      });
+    if (items && typeof items === 'object') {
+      for (const [code, patch] of Object.entries(items)) {
+        const current = doc.items.get(code) || {
+          label: code,
+          pricePerBag: 0,
+          bagKg: 50,
+          npk: { N: 0, P: 0, K: 0 },
+          active: true,
+        };
+        doc.items.set(code, {
+          ...current,
+          ...patch,
+          npk: { ...(current.npk || {}), ...(patch.npk || {}) },
+        });
+      }
     }
-  }
 
-  await doc.save();
-  return res.json(sanitize(doc));
+    await doc.save();
+    return res.json(sanitize(doc));
+  } catch (err) {
+    console.error('[prices] updateAdminPrices error:', err);
+    return res.status(500).json({ error: 'Failed to update prices' });
+  }
 };
 
-// Helper for other controllers (e.g., recommendation)
 exports.getLatestPrices = async () => {
-  const doc =
-    (await PriceSetting.findOne({ key: 'current' })) ||
-    (await PriceSetting.create({ key: 'current' }));
+  const doc = await PriceSettings.ensureSeeded();
   return sanitize(doc);
 };
