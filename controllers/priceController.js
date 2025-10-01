@@ -1,6 +1,13 @@
 // fertisense-backend/controllers/priceController.js
 const PriceSettings = require('../models/PriceSettings');
 
+/* Toggle verbose troubleshoot logs here. Keep false for quiet. */
+const DEBUG = false;
+
+function dlog(...args) {
+  if (DEBUG) console.log('[prices]', ...args);
+}
+
 function sanitize(doc) {
   return {
     id: doc._id.toString(),
@@ -42,46 +49,53 @@ exports.getAdminPrices = async (_req, res) => {
 };
 
 /**
- * Robust: build dot-path $set ops for each item and update atomically.
- * Also logs the incoming body and the computed setOps.
+ * Accepts payload like:
+ * {
+ *   "currency": "PHP",
+ *   "items": {
+ *     "COMPLETE_14_14_14": { "pricePerBag": 1999 }
+ *     // OR "price": 1999  (alias)
+ *     // OR "value": 1999  (alias)
+ *   }
+ * }
  */
 exports.updateAdminPrices = async (req, res) => {
   try {
-    // ---- DIAGNOSTIC LOGS ----
-    console.log('[prices] incoming body:', JSON.stringify(req.body));
-
     const { currency, items } = req.body || {};
     await PriceSettings.ensureSeeded();
 
     const setOps = {};
 
-    if (currency) {
-      setOps['currency'] = String(currency);
-    }
+    if (currency) setOps['currency'] = String(currency);
 
     if (items && typeof items === 'object') {
       for (const [code, patch] of Object.entries(items)) {
         const base = `items.${code}`;
 
-        // Ensure base fields are created when updating a new code
-        // (label defaults to code if not given)
-        if (patch && Object.prototype.hasOwnProperty.call(patch, 'label')) {
-          setOps[`${base}.label`] = String(patch.label);
-        } else {
-          setOps[`${base}.label`] = setOps[`${base}.label`] ?? String(code);
+        // Always ensure basic fields exist for this code
+        setOps[`${base}.label`] = String(patch?.label ?? code);
+        setOps[`${base}.bagKg`] = Number(
+          (patch && patch.bagKg != null ? patch.bagKg : 50)
+        );
+        setOps[`${base}.active`] = Boolean(
+          (patch && Object.prototype.hasOwnProperty.call(patch, 'active') ? patch.active : true)
+        );
+
+        // Accept pricePerBag OR price OR value
+        const rawPrice =
+          patch && patch.pricePerBag != null
+            ? patch.pricePerBag
+            : patch && patch.price != null
+            ? patch.price
+            : patch && patch.value != null
+            ? patch.value
+            : undefined;
+
+        if (rawPrice != null) {
+          setOps[`${base}.pricePerBag`] = Number(rawPrice);
         }
 
-        if (patch && Object.prototype.hasOwnProperty.call(patch, 'pricePerBag')) {
-          setOps[`${base}.pricePerBag`] = Number(patch.pricePerBag);
-        }
-
-        if (patch && Object.prototype.hasOwnProperty.call(patch, 'bagKg')) {
-          setOps[`${base}.bagKg`] = Number(patch.bagKg);
-        } else {
-          // keep a default if creating new
-          setOps[`${base}.bagKg`] = setOps[`${base}.bagKg`] ?? 50;
-        }
-
+        // NPK nested (optional)
         if (patch && patch.npk && typeof patch.npk === 'object') {
           if (Object.prototype.hasOwnProperty.call(patch.npk, 'N'))
             setOps[`${base}.npk.N`] = Number(patch.npk.N);
@@ -90,22 +104,16 @@ exports.updateAdminPrices = async (req, res) => {
           if (Object.prototype.hasOwnProperty.call(patch.npk, 'K'))
             setOps[`${base}.npk.K`] = Number(patch.npk.K);
         } else {
-          // defaults when creating new
+          // keep defaults if creating
           setOps[`${base}.npk.N`] = setOps[`${base}.npk.N`] ?? 0;
           setOps[`${base}.npk.P`] = setOps[`${base}.npk.P`] ?? 0;
           setOps[`${base}.npk.K`] = setOps[`${base}.npk.K`] ?? 0;
         }
-
-        if (patch && Object.prototype.hasOwnProperty.call(patch, 'active')) {
-          setOps[`${base}.active`] = Boolean(patch.active);
-        } else {
-          setOps[`${base}.active`] = setOps[`${base}.active`] ?? true;
-        }
       }
     }
 
-    // ---- DIAGNOSTIC LOGS ----
-    console.log('[prices] setOps for $set:', JSON.stringify(setOps));
+    dlog('incoming body:', JSON.stringify(req.body));
+    dlog('computed $set:', JSON.stringify(setOps));
 
     if (Object.keys(setOps).length === 0) {
       const current = await PriceSettings.findOne({ key: 'current' });
@@ -122,7 +130,7 @@ exports.updateAdminPrices = async (req, res) => {
   }
 };
 
-// Optional helper
+// Helper for other controllers
 exports.getLatestPrices = async () => {
   const doc = await PriceSettings.ensureSeeded();
   return sanitize(doc);

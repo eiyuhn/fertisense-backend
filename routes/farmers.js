@@ -1,12 +1,18 @@
+// routes/farmers.js
 const router = require('express').Router();
+const { auth } = require('../utils/auth');  // ⬅ use this
 const ctrl = require('../controllers/farmerController');
-const { auth } = require('../utils/auth');
 
-// all farmer routes require a logged-in user
-router.post('/', auth, ctrl.create);
-router.get('/', auth, ctrl.list);
-router.get('/:id', auth, ctrl.get);
-router.put('/:id', auth, ctrl.update);
-router.delete('/:id', auth, ctrl.remove);
+// Protect all farmer endpoints
+router.use(auth);
+
+router.get('/', ctrl.listFarmers);
+router.post('/', ctrl.createFarmer);
+router.get('/:id', ctrl.getFarmer);
+router.put('/:id', ctrl.updateFarmer);
+router.delete('/:id', ctrl.deleteFarmer);
+
+// Add a sensor reading
+router.post('/:id/readings', ctrl.addReading);
 
 module.exports = router;

@@ -38,10 +38,13 @@ app.get('/api/ping', (_req, res) => res.json({ ok: true, where: '/api' }));
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
 const priceRoutes = require('./routes/prices');
+const farmerRoutes = require('./routes/farmers');
 
-app.use('/api', priceRoutes);
-app.use('/api/auth', authRoutes);   // e.g. GET /api/auth/ping
-app.use('/api/admin', adminRoutes);
+// 🔑 make ALL routes live under /api/*
+app.use('/api/auth', authRoutes);       // e.g. POST /api/auth/login
+app.use('/api/admin', adminRoutes);     // e.g. GET /api/admin/...
+app.use('/api/prices', priceRoutes);    // e.g. GET /api/prices
+app.use('/api/farmers', farmerRoutes);  // e.g. POST /api/farmers
 
 /* --- health --- */
 app.get('/health', (_req, res) => {
