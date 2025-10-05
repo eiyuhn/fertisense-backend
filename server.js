@@ -31,6 +31,7 @@ app.get('/health', (_req, res) => {
 app.use('/api/auth', require('./routes/auth'));       // POST /api/auth/login etc.
 app.use('/api/prices', require('./routes/prices'));   // if you have prices
 app.use('/api/farmers', require('./routes/farmers')); // farmer + readings CRUD
+app.use('/api/recommend', require('./routes/recommend'));
 
 /* --- 404 --- */
 app.use((req, res) => {
