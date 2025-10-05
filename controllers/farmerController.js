@@ -1,139 +1,161 @@
 // controllers/farmerController.js
+const mongoose = require('mongoose');
 const Farmer = require('../models/Farmer');
+const Reading = require('../models/Reading'); // N, P, K, ph, ec, moisture, temp, farmerId, createdAt
 
-/**
- * Helper: only allow these fields to be set/updated by clients
- */
-const ALLOWED_FIELDS = new Set([
-  'name',
-  'farmLocation',
-  'cropType',
-  'cropStyle',
-  'landAreaHa',
-  'code',
-]);
-
-function pickAllowed(body) {
-  const out = {};
-  for (const k of Object.keys(body || {})) {
-    if (ALLOWED_FIELDS.has(k)) out[k] = body[k];
-  }
-  return out;
-}
-
-/**
- * POST /farmers
- * Create farmer under the authenticated owner
- */
-exports.createFarmer = async (req, res) => {
-  try {
-    if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
-    const payload = pickAllowed(req.body);
-    const farmer = await Farmer.create({ ...payload, ownerId: req.user.id });
-    res.status(201).json(farmer);
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-};
-
-/**
- * GET /farmers
- * List farmers for this owner (newest first)
- */
+// --------- FARMERS ----------
 exports.listFarmers = async (req, res) => {
   try {
-    if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
-    const farmers = await Farmer.find({ ownerId: req.user.id })
-      .sort({ createdAt: -1 });
+    const q = {};
+    // Optional: search by code ?code=ABC123
+    if (req.query.code) q.code = req.query.code;
+    const farmers = await Farmer.find(q).sort({ createdAt: -1 });
     res.json(farmers);
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    res.status(500).json({ error: 'Failed to list farmers: ' + e.message });
   }
 };
 
-/**
- * GET /farmers/:id
- * Read one farmer (owner-scoped)
- */
+exports.createFarmer = async (req, res) => {
+  try {
+    const body = req.body || {};
+    // expected minimal fields: { name, code?, address?, farmLocation?, mobile? }
+    const farmer = await Farmer.create({
+      name: body.name?.trim(),
+      code: body.code?.trim(),
+      address: body.address || '',
+      farmLocation: body.farmLocation || '',
+      mobile: body.mobile || '',
+    });
+    res.status(201).json(farmer);
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to create farmer: ' + e.message });
+  }
+};
+
 exports.getFarmer = async (req, res) => {
   try {
-    if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
-    const farmer = await Farmer.findOne({ _id: req.params.id, ownerId: req.user.id });
+    const farmer = await Farmer.findById(req.params.id);
     if (!farmer) return res.status(404).json({ error: 'Farmer not found' });
     res.json(farmer);
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    res.status(500).json({ error: 'Failed to fetch farmer: ' + e.message });
   }
 };
 
-/**
- * PUT /farmers/:id
- * Update editable fields (owner-scoped)
- */
 exports.updateFarmer = async (req, res) => {
   try {
-    if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
-    const payload = pickAllowed(req.body);
-    const farmer = await Farmer.findOneAndUpdate(
-      { _id: req.params.id, ownerId: req.user.id },
-      payload,
+    const updated = await Farmer.findByIdAndUpdate(
+      req.params.id,
+      {
+        $set: {
+          name: req.body.name,
+          code: req.body.code,
+          address: req.body.address,
+          farmLocation: req.body.farmLocation,
+          mobile: req.body.mobile,
+        },
+      },
       { new: true }
     );
-    if (!farmer) return res.status(404).json({ error: 'Farmer not found' });
-    res.json(farmer);
+    if (!updated) return res.status(404).json({ error: 'Farmer not found' });
+    res.json(updated);
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    res.status(500).json({ error: 'Failed to update farmer: ' + e.message });
   }
 };
 
-/**
- * DELETE /farmers/:id
- * Delete farmer (owner-scoped)
- * If you keep a separate "logs" collection, also delete those here.
- */
 exports.deleteFarmer = async (req, res) => {
   try {
-    if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
-    const farmer = await Farmer.findOneAndDelete({ _id: req.params.id, ownerId: req.user.id });
-    if (!farmer) return res.status(404).json({ error: 'Farmer not found' });
-
-    // Example cascade if you later add a separate logs collection:
-    // await Log.deleteMany({ ownerId: req.user.id, farmerId: req.params.id });
-
-    res.json({ ok: true });
+    const id = req.params.id;
+    const f = await Farmer.findByIdAndDelete(id);
+    if (!f) return res.status(404).json({ error: 'Farmer not found' });
+    // Optional: also delete that farmer’s readings
+    await Reading.deleteMany({ farmerId: id });
+    res.json({ ok: true, deleted: id });
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    res.status(500).json({ error: 'Failed to delete farmer: ' + e.message });
   }
 };
 
-/**
- * POST /farmers/:id/readings
- * Add a sensor reading to this farmer (owner-scoped)
- */
+// --------- READINGS (under a farmer) ----------
+exports.listReadingsByFarmer = async (req, res) => {
+  try {
+    const farmerId = req.params.id;
+    if (!mongoose.isValidObjectId(farmerId)) {
+      return res.status(400).json({ error: 'Invalid farmerId' });
+    }
+    const readings = await Reading.find({ farmerId })
+      .sort({ createdAt: -1 });
+    res.json(readings);
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to list readings: ' + e.message });
+  }
+};
+
 exports.addReading = async (req, res) => {
   try {
-    if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
+    const farmerId = req.params.id;
+    if (!mongoose.isValidObjectId(farmerId)) {
+      return res.status(400).json({ error: 'Invalid farmerId' });
+    }
+    const { npk = {}, ph, ec, moisture, temp, source } = req.body || {};
+    const reading = await Reading.create({
+      farmerId,
+      N: Number(npk.N ?? npk.n ?? 0),
+      P: Number(npk.P ?? npk.p ?? 0),
+      K: Number(npk.K ?? npk.k ?? 0),
+      ph: ph == null ? null : Number(ph),
+      ec: ec == null ? null : Number(ec),
+      moisture: moisture == null ? null : Number(moisture),
+      temp: temp == null ? null : Number(temp),
+      source: source || 'manual',
+    });
+    res.status(201).json(reading);
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to add reading: ' + e.message });
+  }
+};
 
-    const farmer = await Farmer.findOne({ _id: req.params.id, ownerId: req.user.id });
-    if (!farmer) return res.status(404).json({ error: 'Farmer not found' });
-
-    // Expect payload from ESP32 reader (all optional)
-    const {
-      n, p, k, ph, moisture, ec, temperature,
-      raw, source,
-    } = req.body || {};
-
-    // Push newest first
-    farmer.readings.unshift({
-      n, p, k, ph, moisture, ec, temperature,
-      raw,
-      source: source || 'esp32',
+exports.updateReading = async (req, res) => {
+  try {
+    const { id: farmerId, readingId } = req.params;
+    if (!mongoose.isValidObjectId(farmerId) || !mongoose.isValidObjectId(readingId)) {
+      return res.status(400).json({ error: 'Invalid ids' });
+    }
+    // Only allow update on a reading that belongs to this farmer
+    const fields = {};
+    if (req.body.npk) {
+      if ('N' in req.body.npk) fields['N'] = Number(req.body.npk.N);
+      if ('P' in req.body.npk) fields['P'] = Number(req.body.npk.P);
+      if ('K' in req.body.npk) fields['K'] = Number(req.body.npk.K);
+    }
+    ['ph', 'ec', 'moisture', 'temp', 'source'].forEach((k) => {
+      if (k in (req.body || {})) fields[k] = req.body[k];
     });
 
-    await farmer.save();
-
-    res.status(201).json({ ok: true, latest: farmer.readings[0] });
+    const updated = await Reading.findOneAndUpdate(
+      { _id: readingId, farmerId },
+      { $set: fields },
+      { new: true }
+    );
+    if (!updated) return res.status(404).json({ error: 'Reading not found' });
+    res.json(updated);
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    res.status(500).json({ error: 'Failed to update reading: ' + e.message });
+  }
+};
+
+exports.deleteReading = async (req, res) => {
+  try {
+    const { id: farmerId, readingId } = req.params;
+    if (!mongoose.isValidObjectId(farmerId) || !mongoose.isValidObjectId(readingId)) {
+      return res.status(400).json({ error: 'Invalid ids' });
+    }
+    const del = await Reading.findOneAndDelete({ _id: readingId, farmerId });
+    if (!del) return res.status(404).json({ error: 'Reading not found' });
+    res.json({ ok: true, deleted: readingId });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to delete reading: ' + e.message });
   }
 };

@@ -6,10 +6,7 @@ const readingSchema = new mongoose.Schema({
   N: Number,
   P: Number,
   K: Number,
-  pH: Number,
-  temperature: Number,
-  moisture: Number,
-  ec: Number
+  pH: Number
 }, { timestamps: true });
 
 module.exports = mongoose.model('Reading', readingSchema);

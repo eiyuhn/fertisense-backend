@@ -5,15 +5,17 @@ const ctrl = require('../controllers/farmerController');
 
 router.use(auth);
 
+// Farmers
 router.get('/', ctrl.listFarmers);
 router.post('/', ctrl.createFarmer);
 router.get('/:id', ctrl.getFarmer);
 router.put('/:id', ctrl.updateFarmer);
 router.delete('/:id', ctrl.deleteFarmer);
 
-// readings
-router.post('/:id/readings', ctrl.addReading);
-// ⬇️ add this
+// Readings under a farmer
 router.get('/:id/readings', ctrl.listReadingsByFarmer);
+router.post('/:id/readings', ctrl.addReading);
+router.patch('/:id/readings/:readingId', ctrl.updateReading);
+router.delete('/:id/readings/:readingId', ctrl.deleteReading);
 
 module.exports = router;
