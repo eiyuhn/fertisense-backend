@@ -3,50 +3,22 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
-const path = require('path');
 
 const app = express();
 
-/* --- startup diagnostics --- */
-console.log('[BOOT] CWD                =', process.cwd());
-try {
-  console.log('[BOOT] resolve routes/auth =', require.resolve('./routes/auth'));
-} catch (e) {
-  console.log('[BOOT] resolve routes/auth FAILED:', e.message);
-}
-try {
-  console.log('[BOOT] resolve routes/admin =', require.resolve('./routes/admin'));
-} catch (e) {
-  console.log('[BOOT] resolve routes/admin FAILED:', e.message);
-}
-
-/* --- basic middleware --- */
+/* --- middleware --- */
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '1mb' })); // ensure JSON body is parsed
 
-/* --- very loud request logger (TEMP) --- */
+/* --- request logger (dev) --- */
 app.use((req, _res, next) => {
-  console.log('[REQ]', req.method, req.url);
+  console.log('[REQ]', req.method, req.originalUrl);
   next();
 });
 
-/* --- simple pings so we can verify the base path --- */
+/* --- quick pings --- */
 app.get('/ping', (_req, res) => res.json({ ok: true, where: '/' }));
 app.get('/api/ping', (_req, res) => res.json({ ok: true, where: '/api' }));
-
-/* --- routes --- */
-const authRoutes = require('./routes/auth');
-const adminRoutes = require('./routes/admin');
-const priceRoutes = require('./routes/prices');
-const farmerRoutes = require('./routes/farmers');
-
-// 🔑 make ALL routes live under /api/*
-app.use('/api/auth', authRoutes);       // e.g. POST /api/auth/login
-app.use('/api/admin', adminRoutes);     // e.g. GET /api/admin/...
-app.use('/api/prices', priceRoutes);    // e.g. GET /api/prices
-app.use('/api/farmers', farmerRoutes);  // e.g. POST /api/farmers
-
-/* --- health --- */
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
@@ -55,16 +27,25 @@ app.get('/health', (_req, res) => {
   });
 });
 
-/* --- 404 logger (TEMP) --- */
+/* --- routes --- */
+app.use('/api/auth', require('./routes/auth'));       // POST /api/auth/login etc.
+app.use('/api/prices', require('./routes/prices'));   // if you have prices
+app.use('/api/farmers', require('./routes/farmers')); // farmer + readings CRUD
+
+/* --- 404 --- */
 app.use((req, res) => {
   console.log('[404]', req.method, req.originalUrl);
-  res.status(404).send('Not Found');
+  res.status(404).json({ error: 'Not Found' });
 });
 
-/* --- error handler --- */
+/* --- error handler (shows details in dev) --- */
 app.use((err, _req, res, _next) => {
   console.error('[ERROR]', err);
-  res.status(500).json({ error: 'Internal Server Error' });
+  const msg =
+    process.env.NODE_ENV === 'production'
+      ? 'Internal Server Error'
+      : err?.stack || err?.message || String(err);
+  res.status(500).json({ error: msg });
 });
 
 /* --- start --- */

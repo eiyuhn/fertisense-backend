@@ -3,15 +3,14 @@ const mongoose = require('mongoose');
 
 const ReadingSchema = new mongoose.Schema(
   {
-    source: { type: String, default: 'esp32' }, // or 'manual'
-    n: Number,
-    p: Number,
-    k: Number,
-    ph: Number,
-    moisture: Number,
-    ec: Number,
-    temperature: Number,
-    raw: mongoose.Schema.Types.Mixed, // optional: keep full ESP32 payload
+    source: { type: String, enum: ['esp32', 'manual'], default: 'esp32' },
+    // Only NPK + pH
+    n: { type: Number, required: true },
+    p: { type: Number, required: true },
+    k: { type: Number, required: true },
+    ph: { type: Number, default: null },
+    // Keep raw for debugging/ESP32 payload if you like
+    raw: mongoose.Schema.Types.Mixed,
   },
   { timestamps: true }
 );
@@ -24,15 +23,17 @@ const FarmerSchema = new mongoose.Schema(
     cropType: { type: String, enum: ['', 'hybrid', 'inbred', 'pareho'], default: '' },
     cropStyle: { type: String, enum: ['', 'irrigated', 'rainfed', 'pareho'], default: '' },
     landAreaHa: { type: Number, default: 0 },
-    code: { type: String, default: '', trim: true },
 
-    // NEW: history of soil measurements
+    // IMPORTANT: undefined (not empty string) so the sparse unique index works
+    code: { type: String, trim: true, default: undefined },
+
+    // Embedded readings (only NPK + pH)
     readings: { type: [ReadingSchema], default: [] },
   },
   { timestamps: true }
 );
 
-// Unique code per owner (optional but useful)
+// Unique per owner when code exists
 FarmerSchema.index({ ownerId: 1, code: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('Farmer', FarmerSchema);
