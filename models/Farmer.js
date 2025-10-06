@@ -1,4 +1,3 @@
-// models/Farmer.js
 const mongoose = require('mongoose');
 
 const ReadingSchema = new mongoose.Schema(
@@ -8,8 +7,9 @@ const ReadingSchema = new mongoose.Schema(
     p: { type: Number, required: true },
     k: { type: Number, required: true },
     ph: { type: Number, default: null },
+    moisture: { type: Number, default: null },
     raw: mongoose.Schema.Types.Mixed,
-    batchId: { type: String, default: null }
+    batchId: { type: String, default: null },
   },
   { timestamps: true }
 );
@@ -34,11 +34,10 @@ const FarmerSchema = new mongoose.Schema(
     landAreaHa: { type: Number, default: 0 },
     code: { type: String, trim: true, default: undefined },
     readings: { type: [ReadingSchema], default: [] },
-    readingSummaries: { type: [SummarySchema], default: [] } // ⬅️ added
+    readingSummaries: { type: [SummarySchema], default: [] }
   },
   { timestamps: true }
 );
 
 FarmerSchema.index({ ownerId: 1, code: 1 }, { unique: true, sparse: true });
-
 module.exports = mongoose.model('Farmer', FarmerSchema);
