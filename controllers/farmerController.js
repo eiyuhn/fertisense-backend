@@ -2,7 +2,7 @@
 const mongoose = require('mongoose');
 const Farmer = require('../models/Farmer');
 
-/* ---------- utils ---------- */
+/* -------------------------- helpers -------------------------- */
 function slugifyBase(input = '') {
   return String(input)
     .trim()
@@ -27,8 +27,19 @@ async function generateUniqueCode(ownerId, name) {
 function toNumOrNull(v) {
   return v === '' || v === null || v === undefined ? null : Number(v);
 }
+function normalizeNPK(payload = {}) {
+  // Accept top-level n/p/k or N/P/K, or nested npk.{N,P,K}/{n,p,k}
+  const n = payload.n ?? payload.N ?? payload?.npk?.N ?? payload?.npk?.n;
+  const p = payload.p ?? payload.P ?? payload?.npk?.P ?? payload?.npk?.p;
+  const k = payload.k ?? payload.K ?? payload?.npk?.K ?? payload?.npk?.k;
+  return {
+    n: n === '' || n === null || n === undefined ? 0 : Number(n),
+    p: p === '' || p === null || p === undefined ? 0 : Number(p),
+    k: k === '' || k === null || k === undefined ? 0 : Number(k),
+  };
+}
 
-/* ---------- FARMERS ---------- */
+/* -------------------------- FARMERS -------------------------- */
 exports.listFarmers = async (req, res) => {
   try {
     const ownerId = req.user?.id;
@@ -36,6 +47,7 @@ exports.listFarmers = async (req, res) => {
 
     const q = { ownerId };
     if (req.query.code) q.code = String(req.query.code).trim().toLowerCase();
+
     const farmers = await Farmer.find(q).sort({ createdAt: -1 });
     res.json(farmers);
   } catch (e) {
@@ -52,7 +64,7 @@ exports.createFarmer = async (req, res) => {
     const name = (b.name ?? '').toString().trim();
     if (!name) return res.status(400).json({ error: 'Name is required' });
 
-    // If client supplied a code, normalize and ensure unique; else, auto-generate.
+    // If client supplied a code, normalize & ensure unique; else auto-generate.
     let finalCode = null;
     if (typeof b.code === 'string' && b.code.trim().length > 0) {
       const normalized = b.code.trim().toLowerCase();
@@ -67,8 +79,8 @@ exports.createFarmer = async (req, res) => {
       ownerId,
       name,
       farmLocation: (b.farmLocation ?? '').toString(),
-      cropType: (b.cropType ?? '').toString(),
-      cropStyle: (b.cropStyle ?? '').toString(),
+      cropType: (b.cropType ?? '').toString(),    // '', 'hybrid', 'inbred', 'pareho'
+      cropStyle: (b.cropStyle ?? '').toString(),  // '', 'irrigated', 'rainfed', 'pareho'
       landAreaHa: b.landAreaHa === '' || b.landAreaHa === undefined ? 0 : Number(b.landAreaHa),
       code: finalCode,
     };
@@ -76,14 +88,13 @@ exports.createFarmer = async (req, res) => {
     const farmer = await Farmer.create(doc);
     return res.status(201).json(farmer);
   } catch (e) {
-    // Race condition: unique index can still throw E11000; retry once with a fresh code.
+    // Handle unique index race once
     if (e?.code === 11000 && /ownerid_1_code_1/i.test(e?.message || '')) {
       try {
         const ownerId = req.user.id;
         const b = req.body || {};
         const name = (b.name ?? '').toString().trim();
         const retryCode = await generateUniqueCode(ownerId, name);
-
         const farmer = await Farmer.create({
           ownerId,
           name,
@@ -135,7 +146,7 @@ exports.updateFarmer = async (req, res) => {
     if ('code' in b) {
       const normalized = (b.code ?? '').toString().trim().toLowerCase();
       if (normalized.length === 0) {
-        farmer.code = null; // clear → we’ll ensure uniqueness below
+        farmer.code = null; // clear → will re-generate
       } else if (normalized !== (farmer.code || '')) {
         const exists = await Farmer.exists({ ownerId, code: normalized, _id: { $ne: farmer._id } });
         if (exists) return res.status(409).json({ error: 'farmer code already exists for this owner' });
@@ -173,11 +184,12 @@ exports.deleteFarmer = async (req, res) => {
   }
 };
 
-/* ---------- READINGS (embedded: only NPK + pH) ---------- */
+/* --------------------- READINGS (embedded) -------------------- */
 exports.listReadingsByFarmer = async (req, res) => {
   try {
     const ownerId = req.user?.id;
     const id = req.params.id;
+    const limit = Number(req.query.limit || 0); // optional ?limit=50
     if (!mongoose.isValidObjectId(id)) return res.status(400).json({ error: 'Invalid farmerId' });
 
     const farmer = await Farmer.findOne({ _id: id, ownerId }, { readings: 1 });
@@ -186,9 +198,30 @@ exports.listReadingsByFarmer = async (req, res) => {
     const sorted = [...(farmer.readings || [])].sort(
       (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
     );
-    res.json(sorted);
+    res.json(limit > 0 ? sorted.slice(0, limit) : sorted);
   } catch (e) {
     res.status(500).json({ error: 'Failed to list readings: ' + e.message });
+  }
+};
+
+exports.latestReading = async (req, res) => {
+  try {
+    const ownerId = req.user?.id;
+    const farmerId = req.params.id;
+    if (!mongoose.isValidObjectId(farmerId)) return res.status(400).json({ error: 'Invalid farmerId' });
+
+    const farmer = await Farmer.findOne({ _id: farmerId, ownerId }, { readings: 1 });
+    if (!farmer) return res.status(404).json({ error: 'Farmer not found' });
+    if (!farmer.readings || farmer.readings.length === 0) {
+      return res.status(404).json({ error: 'No readings' });
+    }
+
+    const latest = farmer.readings.reduce((a, b) =>
+      new Date(a.createdAt) > new Date(b.createdAt) ? a : b
+    );
+    res.json(latest);
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch latest reading: ' + e.message });
   }
 };
 
@@ -199,23 +232,21 @@ exports.addReading = async (req, res) => {
     if (!mongoose.isValidObjectId(id)) return res.status(400).json({ error: 'Invalid farmerId' });
 
     const b = req.body || {};
-    const n = Number(b?.npk?.N ?? b?.npk?.n ?? b?.n ?? 0);
-    const p = Number(b?.npk?.P ?? b?.npk?.p ?? b?.p ?? 0);
-    const k = Number(b?.npk?.K ?? b?.npk?.k ?? b?.k ?? 0);
+    const { n, p, k } = normalizeNPK(b);
 
     const reading = {
-      source: (b.source || 'manual').toString(),
+      source: (b.source || 'manual').toString(), // 'esp32' or 'manual'
       n,
       p,
       k,
-      ph: toNumOrNull(b.ph),
+      ph: toNumOrNull(b.ph ?? b.pH),
       raw: b.raw,
     };
 
     const updated = await Farmer.findOneAndUpdate(
       { _id: id, ownerId },
-      { $push: { readings: reading } }, // ✅ corrected here
-      { new: true }
+      { $push: { readings: reading } },       // ✅ correct push
+      { new: true, projection: { readings: 1 } }
     );
 
     if (!updated) return res.status(404).json({ error: 'Farmer not found' });
@@ -227,29 +258,36 @@ exports.addReading = async (req, res) => {
   }
 };
 
-
 exports.updateReading = async (req, res) => {
   try {
     const ownerId = req.user?.id;
     const farmerId = req.params.id;
     const readingId = req.params.readingId;
+
     if (!mongoose.isValidObjectId(farmerId)) return res.status(400).json({ error: 'Invalid farmerId' });
     if (!mongoose.isValidObjectId(readingId)) return res.status(400).json({ error: 'Invalid readingId' });
 
     const b = req.body || {};
     const set = {};
-    if (b.npk) {
-      if ('N' in b.npk) set['readings.$.n'] = Number(b.npk.N);
-      if ('P' in b.npk) set['readings.$.p'] = Number(b.npk.P);
-      if ('K' in b.npk) set['readings.$.k'] = Number(b.npk.K);
+
+    if (b.npk || 'N' in b || 'P' in b || 'K' in b || 'n' in b || 'p' in b || 'k' in b) {
+      const { n, p, k } = normalizeNPK(b);
+      if (Number.isFinite(n)) set['readings.$.n'] = n;
+      if (Number.isFinite(p)) set['readings.$.p'] = p;
+      if (Number.isFinite(k)) set['readings.$.k'] = k;
     }
-    if ('ph' in b) set['readings.$.ph'] = toNumOrNull(b.ph);
+
+    if ('ph' in b || 'pH' in b) set['readings.$.ph'] = toNumOrNull(b.ph ?? b.pH);
     if ('source' in b) set['readings.$.source'] = (b.source || 'manual').toString();
+
+    if (Object.keys(set).length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
 
     const updated = await Farmer.findOneAndUpdate(
       { _id: farmerId, ownerId, 'readings._id': readingId },
       { $set: set },
-      { new: true }
+      { new: true, projection: { readings: 1 } }
     );
     if (!updated) return res.status(404).json({ error: 'Reading not found' });
 
@@ -265,6 +303,7 @@ exports.deleteReading = async (req, res) => {
     const ownerId = req.user?.id;
     const farmerId = req.params.id;
     const readingId = req.params.readingId;
+
     if (!mongoose.isValidObjectId(farmerId)) return res.status(400).json({ error: 'Invalid farmerId' });
     if (!mongoose.isValidObjectId(readingId)) return res.status(400).json({ error: 'Invalid readingId' });
 

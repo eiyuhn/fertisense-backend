@@ -4,6 +4,10 @@ const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 
+const pricesRoutes = require('./routes/prices');
+const recommendRoutes = require('./routes/recommend');
+const readingsRoutes = require('./routes/readings');
+
 const app = express();
 
 /* --- middleware --- */

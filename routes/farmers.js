@@ -15,6 +15,7 @@ router.delete('/:id', ctrl.deleteFarmer);
 
 // Readings under a farmer
 router.get('/:id/readings', ctrl.listReadingsByFarmer);
+router.get('/:id/readings/latest', ctrl.latestReading);   // <- NEW
 router.post('/:id/readings', ctrl.addReading);
 router.patch('/:id/readings/:readingId', ctrl.updateReading);
 router.delete('/:id/readings/:readingId', ctrl.deleteReading);

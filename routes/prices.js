@@ -1,14 +1,14 @@
-// fertisense-backend/routes/prices.js
+// routes/prices.js
 const express = require('express');
 const router = express.Router();
 const { auth, requireRole } = require('../utils/auth');
 const priceCtrl = require('../controllers/priceController');
 
-// Public
-router.get('/prices', priceCtrl.getPublicPrices);
+// Public: GET /api/prices
+router.get('/', priceCtrl.getPublicPrices);
 
-// Admin
-router.get('/admin/prices', auth, requireRole('admin'), priceCtrl.getAdminPrices);
-router.put('/admin/prices', auth, requireRole('admin'), priceCtrl.updateAdminPrices);
+// Admin: GET /api/prices/admin, PUT /api/prices/admin
+router.get('/admin', auth, requireRole('admin'), priceCtrl.getAdminPrices);
+router.put('/admin', auth, requireRole('admin'), priceCtrl.updateAdminPrices);
 
 module.exports = router;
