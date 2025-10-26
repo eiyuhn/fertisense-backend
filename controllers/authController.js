@@ -13,11 +13,13 @@ function sanitize(u) {
     address: u.address || '',
     farmLocation: u.farmLocation || '',
     mobile: u.mobile || '',
-    profileImage: u.profileImage || null,
+    // ✅ unified field used by the app
+    photoUrl: u.photoUrl || '',
     createdAt: u.createdAt,
     updatedAt: u.updatedAt,
   };
 }
+
 
 function signToken(userId, role) {
   const secret = process.env.JWT_SECRET || 'dev_secret';

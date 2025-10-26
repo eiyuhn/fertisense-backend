@@ -1,8 +1,8 @@
-// server.js
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
+const path = require('path'); // ✅ added
 
 const pricesRoutes = require('./routes/prices');
 const recommendRoutes = require('./routes/recommend');
@@ -13,6 +13,9 @@ const app = express();
 /* --- middleware --- */
 app.use(cors());
 app.use(express.json({ limit: '1mb' })); // ensure JSON body is parsed
+
+// ✅ serve uploaded profile photos
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 /* --- request logger (dev) --- */
 app.use((req, _res, next) => {
@@ -37,7 +40,7 @@ app.use('/api/prices', require('./routes/prices'));   // if you have prices
 app.use('/api/farmers', require('./routes/farmers')); // farmer + readings CRUD
 app.use('/api/recommend', require('./routes/recommend'));
 app.use('/api/readings', require('./routes/readings'));
-
+app.use('/api/users', require('./routes/users'));     // ✅ new user route
 
 /* --- 404 --- */
 app.use((req, res) => {
