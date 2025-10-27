@@ -11,7 +11,14 @@ const readingsRoutes = require('./routes/readings');
 const app = express();
 
 /* --- middleware --- */
-app.use(cors());
+// ✅ FIXED: Explicitly configure CORS to handle preflight (OPTIONS)
+// requests and allow file uploads from all origins.
+app.use(cors({
+  origin: '*', // Allow all origins
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], // Allow all methods
+  allowedHeaders: ['Content-Type', 'Authorization'] // Allow necessary headers
+}));
+
 app.use(express.json({ limit: '1mb' })); // ensure JSON body is parsed
 
 // ✅ serve uploaded profile photos

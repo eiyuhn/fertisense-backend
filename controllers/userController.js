@@ -24,8 +24,11 @@ exports.uploadMyPhoto = async (req, res, next) => {
     // cleanup temp file (ignore errors)
     fs.unlink(inputPath, () => {});
 
-    // Build public URL (served statically by Express)
-    const publicUrl = `${req.protocol}://${req.get('host')}/uploads/avatars/${filename}`;
+    // ✅ FIXED: Build a relative URL.
+    // This avoids the http:// vs https:// problem on Render.
+    // Your app's `api.ts` (which has the correct `https://...` baseURL)
+    // will be prepended to this path.
+    const publicUrl = `/uploads/avatars/${filename}`;
 
     const user = await User.findByIdAndUpdate(
       req.user.id,
@@ -38,6 +41,8 @@ exports.uploadMyPhoto = async (req, res, next) => {
     return res.json({ ok: true, photoUrl: user.photoUrl });
   } catch (err) {
     console.error('uploadMyPhoto error:', err);
+    // ✅ Added cleanup on error
+    if (req.file) fs.unlink(req.file.path, () => {});
     return res.status(500).json({ error: err.message || 'Internal Server Error' });
   }
 };
