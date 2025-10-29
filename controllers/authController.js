@@ -116,7 +116,7 @@ exports.updateMe = async (req, res) => {
   }
 };
 
-// POST /api/auth/me/photo (This should ideally be moved to userController.js)
+// POST /api/auth/me/photo (Upload)
 exports.uploadMyPhoto = async (req, res) => {
   try {
     // We will assume that the photo file has been uploaded by the Multer middleware
@@ -137,5 +137,26 @@ exports.uploadMyPhoto = async (req, res) => {
   } catch (err) {
     console.error('uploadMyPhoto error:', err);
     return res.status(500).json({ error: 'Failed to upload photo: ' + err.message });
+  }
+};
+
+// DELETE /api/auth/me/photo (Delete)
+exports.deleteMyPhoto = async (req, res) => {
+  try {
+    // Set photoUrl to an empty string/null to use the default avatar on the client
+    const u = await User.findByIdAndUpdate(
+      req.user.id,
+      { photoUrl: '' }, // Clear the URL
+      { new: true }
+    );
+    if (!u) return res.status(404).json({ error: 'Not found' });
+
+    // Note: Actual file deletion from disk/storage (e.g., S3) should happen here
+    
+    // Returns sanitized user, which now has an empty photoUrl
+    return res.json(sanitize(u));
+  } catch (err) {
+    console.error('deleteMyPhoto error:', err);
+    return res.status(500).json({ error: 'Failed to delete photo: ' + err.message });
   }
 };
