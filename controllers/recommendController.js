@@ -1,7 +1,82 @@
 // controllers/recommendController.js
 const PriceSettings = require('../models/PriceSettings');
 
-/* ---------------- small helpers ---------------- */
+/**
+ * Approx. conversion:
+ *  1 ppm ≈ 2 kg/ha (0–20 cm soil depth, bulk density ~1.3 g/cm³)
+ */
+const PPM_TO_KG_HA = 2.0;
+
+/** IRRI-style classification thresholds (sensor values are in ppm) */
+const IRRI_THRESHOLDS = {
+  N: { lowMax: 40, mediumMax: 80 },     // 0–40 low, 41–80 medium, >80 high
+  P: { lowMax: 10, mediumMax: 20 },     // 0–10 low, 11–20 medium, >20 high
+  K: { lowMax: 80, mediumMax: 150 },    // 0–80 low, 81–150 medium, >150 high
+};
+
+/**
+ * IRRI fertilizer recommendations (kg/ha of N, P, K) by category
+ * ✳️ FILL THESE using your official tables where needed.
+ * Below: example from your "Hybrid, Wet Season, Light Soils" table.
+ */
+const IRRI_RATES = {
+  HYBRID: {
+    WET: {
+      LIGHT: {
+        N: { low: 120, medium: 90, high: 60 },
+        P: { low: 70,  medium: 50, high: 30 },
+        K: { low: 70,  medium: 50, high: 30 },
+      },
+      HEAVY: {
+        // TODO: replace with correct values from your table
+        N: { low: 100, medium: 80, high: 50 },
+        P: { low: 60,  medium: 40, high: 20 },
+        K: { low: 60,  medium: 40, high: 20 },
+      },
+    },
+    DRY: {
+      // TODO: replace with dry-season values (if you have them)
+      LIGHT: {
+        N: { low: 100, medium: 80, high: 50 },
+        P: { low: 60,  medium: 40, high: 20 },
+        K: { low: 60,  medium: 40, high: 20 },
+      },
+      HEAVY: {
+        N: { low: 90, medium: 70, high: 40 },
+        P: { low: 50, medium: 30, high: 20 },
+        K: { low: 50, medium: 30, high: 20 },
+      },
+    },
+  },
+  INBRED: {
+    // Fallback / sample values – adjust based on your IRRI references
+    WET: {
+      LIGHT: {
+        N: { low: 100, medium: 80, high: 50 },
+        P: { low: 60,  medium: 40, high: 20 },
+        K: { low: 60,  medium: 40, high: 20 },
+      },
+      HEAVY: {
+        N: { low: 90, medium: 70, high: 40 },
+        P: { low: 50, medium: 30, high: 20 },
+        K: { low: 50, medium: 30, high: 20 },
+      },
+    },
+    DRY: {
+      LIGHT: {
+        N: { low: 90, medium: 70, high: 40 },
+        P: { low: 50, medium: 30, high: 20 },
+        K: { low: 50, medium: 30, high: 20 },
+      },
+      HEAVY: {
+        N: { low: 80, medium: 60, high: 40 },
+        P: { low: 40, medium: 30, high: 20 },
+        K: { low: 40, medium: 30, high: 20 },
+      },
+    },
+  },
+};
+
 function money(x) {
   return Math.round((x || 0) * 100) / 100;
 }
@@ -9,329 +84,270 @@ function subtotalBags(bags, pricePerBag) {
   return money((bags || 0) * (pricePerBag || 0));
 }
 
-/* -------------- 1. Classify NPK ppm → L / M / H -------------- */
-// You can tweak these thresholds if DA/BAR gives different ones.
-function classifyN(nPpm) {
-  if (nPpm < 100) return 'L';
-  if (nPpm <= 150) return 'M';
-  return 'H';
-}
-function classifyP(pPpm) {
-  if (pPpm < 15) return 'L';
-  if (pPpm <= 30) return 'M';
-  return 'H';
-}
-function classifyK(kPpm) {
-  if (kPpm < 80) return 'L';
-  if (kPpm <= 150) return 'M';
-  return 'H';
+function classifyLevel(valuePpm, thr) {
+  if (valuePpm <= thr.lowMax) return 'low';
+  if (valuePpm <= thr.mediumMax) return 'medium';
+  return 'high';
 }
 
-/* -------------- 2. Target kg/ha table (from your booklet) -------------- */
+function safeGetRates(riceType, season, soilType) {
+  const type = (riceType || 'HYBRID').toUpperCase();
+  const seas = (season || 'WET').toUpperCase();
+  const soil = (soilType || 'LIGHT').toUpperCase();
 
-// variety: "hybrid" | "inbred"
-// soil: "light" | "medHeavy"
-// season: "wet" | "dry"
-// ratings: "L" | "M" | "H"
+  const byType = IRRI_RATES[type] || IRRI_RATES.HYBRID;
+  const bySeason = (byType && byType[seas]) || byType.WET;
+  const bySoil = (bySeason && bySeason[soil]) || bySeason.LIGHT;
 
-const RICE_TARGETS = {
-  hybrid: {
-    light: {
-      wet: {
-        N: { L: 120, M: 90, H: 60 },
-        P: { L: 70,  M: 50, H: 30 },
-        K: { L: 80,  M: 50, H: 30 },
-      },
-      dry: {
-        N: { L: 140, M: 110, H: 80 },
-        P: { L: 80,  M: 60,  H: 30 },
-        K: { L: 90,  M: 70,  H: 50 },
-      },
-    },
-    medHeavy: {
-      wet: {
-        // This row matches your 110-70-70 example for hybrid, wet, med-heavy
-        N: { L: 110, M: 80, H: 50 },
-        P: { L: 70,  M: 50, H: 30 },
-        K: { L: 70,  M: 50, H: 30 },
-      },
-      dry: {
-        N: { L: 120, M: 90, H: 60 },
-        P: { L: 70,  M: 50, H: 30 },
-        K: { L: 80,  M: 60, H: 40 },
-      },
-    },
-  },
-  inbred: {
-    light: {
-      wet: {
-        N: { L: 100, M: 70, H: 40 },
-        P: { L: 60,  M: 40, H: 20 },
-        K: { L: 60,  M: 40, H: 20 },
-      },
-      dry: {
-        N: { L: 120, M: 90, H: 60 },
-        P: { L: 60,  M: 40, H: 20 },
-        K: { L: 60,  M: 40, H: 20 },
-      },
-    },
-    medHeavy: {
-      wet: {
-        N: { L: 90,  M: 60, H: 30 },
-        P: { L: 60,  M: 40, H: 20 },
-        K: { L: 60,  M: 40, H: 20 },
-      },
-      dry: {
-        N: { L: 100, M: 70, H: 40 },
-        P: { L: 60,  M: 40, H: 20 },
-        K: { L: 60,  M: 40, H: 20 },
-      },
-    },
-  },
-};
-
-function getTargetKgPerHa(variety, soilClass, season, nRating, pRating, kRating) {
-  const v = RICE_TARGETS[variety] || RICE_TARGETS.hybrid;
-  const s = v[soilClass] || v.medHeavy;
-  const row = (s && s[season]) || s.wet;
-
-  return {
-    Nkg: row.N[nRating],
-    Pkg: row.P[pRating],
-    Kkg: row.K[kRating],
-  };
+  return bySoil;
 }
 
-/* -------------- 3. Read fertilizer products from PriceSettings -------------- */
-
-function extractProducts(priceDoc) {
-  const out = [];
-  const map = priceDoc.items instanceof Map
-    ? Object.fromEntries(priceDoc.items.entries())
-    : priceDoc.items || {};
-
-  for (const [code, v] of Object.entries(map)) {
-    if (!v) continue;
-    const npk = v.npk || { N: 0, P: 0, K: 0 };
-    out.push({
-      code,
-      label: v.label || code,
-      pricePerBag: Number(v.pricePerBag || 0),
-      bagKg: v.bagKg || 50,
-      Npct: Number(npk.N || 0),
-      Ppct: Number(npk.P || 0),
-      Kpct: Number(npk.K || 0),
-    });
-  }
-  return out;
+function phStatus(ph) {
+  if (ph == null || isNaN(ph)) return 'unknown';
+  if (ph < 5.5) return 'acidic';
+  if (ph > 7.5) return 'alkaline';
+  return 'neutral';
 }
 
-function kgPerBag(prod, nutrient) {
-  const pct =
-    nutrient === 'N' ? prod.Npct :
-    nutrient === 'P' ? prod.Ppct :
-    prod.Kpct;
-  return (pct / 100) * prod.bagKg;
-}
+/**
+ * Build fertilizer plans using current price settings + IRRI NPK targets.
+ * Uses your PriceSettings.items entries (npk%, bagKg, pricePerBag).
+ */
+function buildPlansFromTargets(targetN, targetP, targetK, priceDoc, areaHa = 1) {
+  const itemsMap = Object.fromEntries(priceDoc.items.entries());
+  const currency = priceDoc.currency || 'PHP';
 
-function costPerKgNutrient(prod, nutrient) {
-  const kg = kgPerBag(prod, nutrient);
-  return kg > 0 ? prod.pricePerBag / kg : Number.POSITIVE_INFINITY;
-}
-
-function selectFertilizers(products) {
-  let balanced, nOnly, kOnly;
-
-  for (const p of products) {
-    const hasN = p.Npct > 0;
-    const hasP = p.Ppct > 0;
-    const hasK = p.Kpct > 0;
-
-    if (hasN && hasP && hasK) {
-      // balanced NPK (e.g. 14-14-14). Choose cheapest per kg P.
-      if (!balanced || costPerKgNutrient(p, 'P') < costPerKgNutrient(balanced, 'P')) {
-        balanced = p;
-      }
-    }
-
-    if (hasN && !hasP && !hasK) {
-      // N only (e.g. 46-0-0, 21-0-0)
-      if (!nOnly || costPerKgNutrient(p, 'N') < costPerKgNutrient(nOnly, 'N')) {
-        nOnly = p;
-      }
-    }
-
-    if (!hasN && !hasP && hasK) {
-      // K only (e.g. 0-0-60)
-      if (!kOnly || costPerKgNutrient(p, 'K') < costPerKgNutrient(kOnly, 'K')) {
-        kOnly = p;
-      }
-    }
+  function needKg(nutrientKgHa) {
+    return nutrientKgHa * (areaHa || 1);
   }
 
-  return { balanced, nOnly, kOnly };
-}
-
-/* -------------- 4. Build a balanced-first plan -------------- */
-
-function roundBags(x) {
-  // 2 decimal places; you can switch to 0.25 stepping if you want
-  return Math.round(x * 100) / 100;
-}
-
-function computeBalancedPlan(targetNkg, targetPkg, targetKkg, ferts) {
-  const rows = [];
-  let Nsup = 0;
-  let Psup = 0;
-  let Ksup = 0;
-  let totalCost = 0;
-
-  const { balanced, nOnly, kOnly } = ferts;
-
-  if (!balanced || !nOnly || !kOnly) {
-    // Not enough product types to build a proper plan
-    return { rows: [], supplied: { Nkg: 0, Pkg: 0, Kkg: 0 }, totalCost: 0 };
+  function getItem(code) {
+    const item = itemsMap[code];
+    if (!item) throw new Error(`Missing fertilizer item in PriceSettings: ${code}`);
+    return item;
   }
 
-  // 1) Use balanced NPK to satisfy all P (hardest to adjust)
-  const PkgPerBag = kgPerBag(balanced, 'P') || 0.0001;
-  const bagsBalanced = roundBags(targetPkg / PkgPerBag);
+  // --- Plan 1: Straight Fertilizers (Urea, SSP, MOP) ---
+  function makePlanStraight() {
+    const urea = getItem('UREA_46_0_0');
+    const ssp  = getItem('SSP_0_16_0');
+    const mop  = getItem('MOP_0_0_60');
 
-  Nsup += bagsBalanced * kgPerBag(balanced, 'N');
-  Psup += bagsBalanced * kgPerBag(balanced, 'P');
-  Ksup += bagsBalanced * kgPerBag(balanced, 'K');
-  totalCost += bagsBalanced * balanced.pricePerBag;
-  rows.push({ product: balanced, bags: bagsBalanced });
+    const nKg = needKg(targetN);
+    const pKg = needKg(targetP);
+    const kKg = needKg(targetK);
 
-  // 2) Remaining N & K after NPK
-  const remainingN = Math.max(0, targetNkg - Nsup);
-  const remainingK = Math.max(0, targetKkg - Ksup);
+    const ureaKg = urea.npk.N > 0 ? nKg / (urea.npk.N / 100) : 0;
+    const sspKg  = ssp.npk.P  > 0 ? pKg / (ssp.npk.P  / 100) : 0;
+    const mopKg  = mop.npk.K  > 0 ? kKg / (mop.npk.K  / 100) : 0;
 
-  // 3) N-only fertilizer (e.g. Urea 46-0-0)
-  const NkgPerBag_N = kgPerBag(nOnly, 'N') || 0.0001;
-  const bagsN = roundBags(remainingN / NkgPerBag_N);
+    const ureaBags = Math.ceil(ureaKg / urea.bagKg);
+    const sspBags  = Math.ceil(sspKg  / ssp.bagKg);
+    const mopBags  = Math.ceil(mopKg  / mop.bagKg);
 
-  Nsup += bagsN * NkgPerBag_N;
-  totalCost += bagsN * nOnly.pricePerBag;
-  if (bagsN > 0) rows.push({ product: nOnly, bags: bagsN });
+    const rows = [
+      {
+        key: 'UREA_46_0_0',
+        label: urea.label,
+        bags: ureaBags,
+        pricePerBag: urea.pricePerBag,
+        subtotal: subtotalBags(ureaBags, urea.pricePerBag),
+      },
+      {
+        key: 'SSP_0_16_0',
+        label: ssp.label,
+        bags: sspBags,
+        pricePerBag: ssp.pricePerBag,
+        subtotal: subtotalBags(sspBags, ssp.pricePerBag),
+      },
+      {
+        key: 'MOP_0_0_60',
+        label: mop.label,
+        bags: mopBags,
+        pricePerBag: mop.pricePerBag,
+        subtotal: subtotalBags(mopBags, mop.pricePerBag),
+      },
+    ];
 
-  // 4) K-only fertilizer (e.g. 0-0-60)
-  const KkgPerBag_K = kgPerBag(kOnly, 'K') || 0.0001;
-  const bagsK = roundBags(remainingK / KkgPerBag_K);
+    const total = money(rows.reduce((a, r) => a + r.subtotal, 0));
+    return { code: 'plan1', title: 'Straight Fertilizers', rows, total, currency };
+  }
 
-  Ksup += bagsK * KkgPerBag_K;
-  totalCost += bagsK * kOnly.pricePerBag;
-  if (bagsK > 0) rows.push({ product: kOnly, bags: bagsK });
+  // --- Plan 2: DAP-based (DAP covers P + some N, then Urea + MOP) ---
+  function makePlanDAP() {
+    const dap  = getItem('DAP_18_46_0');
+    const urea = getItem('UREA_46_0_0');
+    const mop  = getItem('MOP_0_0_60');
 
-  return {
-    rows,
-    supplied: { Nkg: Nsup, Pkg: Psup, Kkg: Ksup },
-    totalCost,
-  };
+    const nKg = needKg(targetN);
+    const pKg = needKg(targetP);
+    const kKg = needKg(targetK);
+
+    const dapKg = dap.npk.P > 0 ? pKg / (dap.npk.P / 100) : 0;
+    const nFromDAP = dapKg * (dap.npk.N / 100);
+    const nRemaining = Math.max(0, nKg - nFromDAP);
+
+    const ureaKg = urea.npk.N > 0 ? nRemaining / (urea.npk.N / 100) : 0;
+    const mopKg  = mop.npk.K  > 0 ? kKg / (mop.npk.K  / 100) : 0;
+
+    const dapBags  = Math.ceil(dapKg  / dap.bagKg);
+    const ureaBags = Math.ceil(ureaKg / urea.bagKg);
+    const mopBags  = Math.ceil(mopKg  / mop.bagKg);
+
+    const rows = [
+      {
+        key: 'DAP_18_46_0',
+        label: dap.label,
+        bags: dapBags,
+        pricePerBag: dap.pricePerBag,
+        subtotal: subtotalBags(dapBags, dap.pricePerBag),
+      },
+      {
+        key: 'UREA_46_0_0',
+        label: urea.label,
+        bags: ureaBags,
+        pricePerBag: urea.pricePerBag,
+        subtotal: subtotalBags(ureaBags, urea.pricePerBag),
+      },
+      {
+        key: 'MOP_0_0_60',
+        label: mop.label,
+        bags: mopBags,
+        pricePerBag: mop.pricePerBag,
+        subtotal: subtotalBags(mopBags, mop.pricePerBag),
+      },
+    ];
+
+    const total = money(rows.reduce((a, r) => a + r.subtotal, 0));
+    return { code: 'plan2', title: 'DAP + Urea + MOP', rows, total, currency };
+  }
+
+  // --- Plan 3: NPK complete + Urea top-up ---
+  function makePlanNPK() {
+    // You can use either NPK_14_14_14 or COMPLETE_14_14_14 depending on your seed
+    const npk  = itemsMap['NPK_14_14_14'] || itemsMap['COMPLETE_14_14_14'];
+    const urea = getItem('UREA_46_0_0');
+
+    if (!npk) {
+      // If NPK is not defined, skip this plan
+      return null;
+    }
+
+    const nKg = needKg(targetN);
+    const pKg = needKg(targetP);
+    const kKg = needKg(targetK);
+
+    const npkN = npk.npk.N / 100;
+    const npkP = npk.npk.P / 100;
+    const npkK = npk.npk.K / 100;
+
+    // kg of NPK to cover the max of N/P/K demand
+    const npkKg = Math.max(
+      npkN > 0 ? nKg / npkN : 0,
+      npkP > 0 ? pKg / npkP : 0,
+      npkK > 0 ? kKg / npkK : 0
+    );
+
+    const nFromNPK = npkKg * npkN;
+    const nRemaining = Math.max(0, nKg - nFromNPK);
+    const ureaKg = urea.npk.N > 0 ? nRemaining / (urea.npk.N / 100) : 0;
+
+    const npkBags  = Math.ceil(npkKg  / npk.bagKg);
+    const ureaBags = Math.ceil(ureaKg / urea.bagKg);
+
+    const rows = [
+      {
+        key: npk.code || 'NPK_14_14_14',
+        label: npk.label,
+        bags: npkBags,
+        pricePerBag: npk.pricePerBag,
+        subtotal: subtotalBags(npkBags, npk.pricePerBag),
+      },
+      {
+        key: 'UREA_46_0_0',
+        label: urea.label,
+        bags: ureaBags,
+        pricePerBag: urea.pricePerBag,
+        subtotal: subtotalBags(ureaBags, urea.pricePerBag),
+      },
+    ];
+
+    const total = money(rows.reduce((a, r) => a + r.subtotal, 0));
+    return { code: 'plan3', title: 'Complete (NPK) + Urea', rows, total, currency };
+  }
+
+  const plans = [];
+  try { plans.push(makePlanStraight()); } catch (e) { console.warn('Plan1 error:', e.message); }
+  try { plans.push(makePlanDAP()); } catch (e) { console.warn('Plan2 error:', e.message); }
+  try {
+    const p3 = makePlanNPK();
+    if (p3) plans.push(p3);
+  } catch (e) {
+    console.warn('Plan3 error:', e.message);
+  }
+
+  return plans;
 }
-
-/* -------------- 5. Normalization helpers for request body -------------- */
-
-function normalizeVariety(raw) {
-  const s = (raw || '').toString().toLowerCase();
-  if (s.includes('inbred')) return 'inbred';
-  return 'hybrid';
-}
-function normalizeSoil(raw) {
-  const s = (raw || '').toString().toLowerCase();
-  if (s.includes('light')) return 'light';
-  return 'medHeavy';
-}
-function normalizeSeason(raw) {
-  const s = (raw || '').toString().toLowerCase();
-  if (s.includes('dry')) return 'dry';
-  return 'wet';
-}
-
-/* -------------- 6. Main controller -------------- */
 
 exports.recommend = async (req, res) => {
   try {
-    const body = req.body || {};
-
-    // Support both old (n,p,k) and new (nPpm,pPpm,kPpm) field names
-    const nPpm = Number(body.nPpm ?? body.n ?? 0);
-    const pPpm = Number(body.pPpm ?? body.p ?? 0);
-    const kPpm = Number(body.kPpm ?? body.k ?? 0);
-    const ph = body.ph != null ? Number(body.ph) : undefined;
-
-    if (!Number.isFinite(nPpm) || !Number.isFinite(pPpm) || !Number.isFinite(kPpm)) {
-      return res.status(400).json({ ok: false, error: 'Invalid NPK values.' });
-    }
-
-    const areaHa = Number(body.areaHa || 1);
-    const variety = normalizeVariety(body.riceType || body.variety);
-    const soilClass = normalizeSoil(body.soilType);
-    const season = normalizeSeason(body.season);
-
-    const nRating = classifyN(nPpm);
-    const pRating = classifyP(pPpm);
-    const kRating = classifyK(kPpm);
-
-    // kg/ha from table
-    const { Nkg, Pkg, Kkg } = getTargetKgPerHa(
-      variety,
-      soilClass,
+    // Sensor-based inputs in **ppm**
+    // n, p, k are from soil test (NPK in ppm)
+    const {
+      n = 0,
+      p = 0,
+      k = 0,
+      ph,
       season,
-      nRating,
-      pRating,
-      kRating
-    );
+      riceType,
+      soilType,
+      areaHa = 1,
+    } = req.body || {};
 
-    // total requirement for the actual field size
-    const totalN = Nkg * areaHa;
-    const totalP = Pkg * areaHa;
-    const totalK = Kkg * areaHa;
+    const nPpm = Number(n) || 0;
+    const pPpm = Number(p) || 0;
+    const kPpm = Number(k) || 0;
+    const phVal = ph != null ? Number(ph) : undefined;
 
-    // Load fertilizer price list
+    const nLevel = classifyLevel(nPpm, IRRI_THRESHOLDS.N);
+    const pLevel = classifyLevel(pPpm, IRRI_THRESHOLDS.P);
+    const kLevel = classifyLevel(kPpm, IRRI_THRESHOLDS.K);
+
+    const rates = safeGetRates(riceType, season, soilType);
+
+    const targetN = rates.N[nLevel];
+    const targetP = rates.P[pLevel];
+    const targetK = rates.K[kLevel];
+
+    const phStat = phStatus(phVal);
+
+    // Friendly narrative
+    const englishText = [
+      `Based on the soil test, Nitrogen is ${nLevel.toUpperCase()}, Phosphorus is ${pLevel.toUpperCase()}, and Potassium is ${kLevel.toUpperCase()}.`,
+      `For a ${ (riceType || 'hybrid').toLowerCase() } rice field (${(season || 'wet').toLowerCase()} season, ${(soilType || 'light').toLowerCase()} soil), IRRI-based recommendation is:`,
+      `N ≈ ${targetN} kg/ha, P ≈ ${targetP} kg/ha, K ≈ ${targetK} kg/ha.`,
+      phVal != null
+        ? `Soil pH is ${phVal.toFixed(1)} (${phStat}).`
+        : `Soil pH was not provided.`,
+    ].join(' ');
+
+    const tagalogText = [
+      `Batay sa soil test, ang Nitrogen ay ${nLevel.toUpperCase()}, ang Phosphorus ay ${pLevel.toUpperCase()}, at ang Potassium ay ${kLevel.toUpperCase()}.`,
+      `Para sa ${ (riceType || 'hybrid').toLowerCase() } na palay sa ${ (season || 'wet').toLowerCase() } season at ${(soilType || 'light').toLowerCase()} na lupa, inirerekomenda na:`,
+      `N ≈ ${targetN} kg/ha, P ≈ ${targetP} kg/ha, K ≈ ${targetK} kg/ha.`,
+      phVal != null
+        ? `Ang pH ng lupa ay ${phVal.toFixed(1)} (${phStat}).`
+        : `Walang naitalang pH ng lupa.`,
+    ].join(' ');
+
+    // Load price settings for fertilizer plans
     const priceDoc = await PriceSettings.ensureSeeded();
-    const products = extractProducts(priceDoc);
-    const ferts = selectFertilizers(products);
-    const planCalc = computeBalancedPlan(totalN, totalP, totalK, ferts);
+    const plans = buildPlansFromTargets(targetN, targetP, targetK, priceDoc, areaHa);
 
-    const rows = planCalc.rows.map((r) => ({
-      key: r.product.code,
-      label: r.product.label,
-      bags: r.bags,
-      pricePerBag: r.product.pricePerBag,
-      subtotal: subtotalBags(r.bags, r.product.pricePerBag),
-    }));
-
-    const plan = {
-      code: 'rice_balanced',
-      title: 'Rice Fertilizer Plan (Balanced first)',
-      rows,
-      total: money(planCalc.totalCost),
-      currency: priceDoc.currency || 'PHP',
-    };
-
-    const currency = plan.currency;
-
-    // Narrative in TL + EN
-    const englishText =
-      `Soil test readings: N=${nPpm.toFixed(1)} ppm, ` +
-      `P=${pPpm.toFixed(1)} ppm, K=${kPpm.toFixed(1)} ppm.\n` +
-      `This corresponds to soil fertility N=${nRating}, P=${pRating}, K=${kRating}. ` +
-      `For ${variety} rice (${season} season, ${soilClass === 'medHeavy' ? 'medium-heavy' : 'light'} soil) ` +
-      `the recommended application is about ${totalN.toFixed(0)} kg N, ` +
-      `${totalP.toFixed(0)} kg P and ${totalK.toFixed(0)} kg K for ${areaHa} ha.`;
-
-    const tagalogText =
-      `Base sa soil test: N=${nPpm.toFixed(1)} ppm, P=${pPpm.toFixed(1)} ppm, ` +
-      `K=${kPpm.toFixed(1)} ppm.\n` +
-      `Ang lupa ay may antas na N=${nRating}, P=${pRating}, K=${kRating}. ` +
-      `Para sa ${variety.toUpperCase()} rice (${season} season, ` +
-      `${soilClass === 'medHeavy' ? 'medium-heavy' : 'light'} soil), ` +
-      `inirerekomenda ang humigit-kumulang ${totalN.toFixed(0)} kg N, ` +
-      `${totalP.toFixed(0)} kg P at ${totalK.toFixed(0)} kg K para sa ${areaHa} ha.`;
-
-    const plans = [plan];
-    const cheapest = { code: plan.code, total: plan.total, currency };
+    let cheapest = null;
+    if (plans.length > 0) {
+      cheapest = plans.reduce((a, b) => (a.total <= b.total ? a : b), plans[0]);
+    }
 
     res.json({
       ok: true,
@@ -339,17 +355,24 @@ exports.recommend = async (req, res) => {
         nPpm,
         pPpm,
         kPpm,
-        ph,
+        ph: phVal,
+        season: season || 'WET',
+        riceType: riceType || 'HYBRID',
+        soilType: soilType || 'LIGHT',
         areaHa,
-        variety,
-        soilClass,
-        season,
-        ratings: { N: nRating, P: pRating, K: kRating },
-        targetsPerHa: { Nkg, Pkg, Kkg },
+        // For debugging view:
+        nKgHaApprox: nPpm * PPM_TO_KG_HA,
+        pKgHaApprox: pPpm * PPM_TO_KG_HA,
+        kKgHaApprox: kPpm * PPM_TO_KG_HA,
+        levels: { N: nLevel, P: pLevel, K: kLevel },
+        targetsKgHa: { N: targetN, P: targetP, K: targetK },
       },
       narrative: { en: englishText, tl: tagalogText },
       plans,
-      cheapest,
+      cheapest: cheapest
+        ? { code: cheapest.code, total: cheapest.total, currency: cheapest.currency }
+        : null,
+      currency: priceDoc.currency || 'PHP',
       updatedAt: priceDoc.updatedAt,
     });
   } catch (e) {
