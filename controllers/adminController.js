@@ -1,4 +1,6 @@
+// controllers/adminController.js
 const Farmer = require('../models/Farmer');
+const User = require('../models/User'); // ✅ added
 
 /* ---------------- Utils ---------------- */
 function sanitize(f) {
@@ -58,12 +60,18 @@ exports.createFarmer = async (req, res) => {
     const cs = CROP_STYLES.includes(cropStyle) ? cropStyle : '';
     const area = asNumber(landAreaHa, 0);
 
-    const generated = `${nameTrim.split(/\s+/)[0].toLowerCase()}-${Date.now().toString().slice(-4)}`;
+    const generated = `${nameTrim.split(/\s+/)[0].toLowerCase()}-${Date.now()
+      .toString()
+      .slice(-4)}`;
     const safeCode = cleanCode(code || generated);
 
     if (safeCode) {
-      const exists = await Farmer.findOne({ ownerId: req.user.id, code: safeCode }).lean();
-      if (exists) return res.status(409).json({ error: 'Farmer code already exists' });
+      const exists = await Farmer.findOne({
+        ownerId: req.user.id,
+        code: safeCode,
+      }).lean();
+      if (exists)
+        return res.status(409).json({ error: 'Farmer code already exists' });
     }
 
     const doc = await Farmer.create({
@@ -84,31 +92,52 @@ exports.createFarmer = async (req, res) => {
       return res.status(409).json({ error: 'Farmer code already exists' });
     }
     console.error('Admin createFarmer error:', err);
-    return res.status(500).json({ error: 'Failed to create farmer: ' + err.message });
+    return res
+      .status(500)
+      .json({ error: 'Failed to create farmer: ' + err.message });
   }
 };
 
 exports.listFarmers = async (req, res) => {
-  const items = await Farmer.find({ ownerId: req.user.id }).sort({ createdAt: -1 });
+  const items = await Farmer.find({ ownerId: req.user.id }).sort({
+    createdAt: -1,
+  });
   return res.json(items.map(sanitize));
 };
 
 exports.getFarmer = async (req, res) => {
-  const f = await Farmer.findOne({ _id: req.params.id, ownerId: req.user.id });
+  const f = await Farmer.findOne({
+    _id: req.params.id,
+    ownerId: req.user.id,
+  });
   if (!f) return res.status(404).json({ error: 'Not found' });
   return res.json(sanitize(f));
 };
 
 exports.updateFarmer = async (req, res) => {
   const patch = {};
-  const fields = ['name','address','farmLocation','mobile','cropType','cropStyle','landAreaHa','code'];
+  const fields = [
+    'name',
+    'address',
+    'farmLocation',
+    'mobile',
+    'cropType',
+    'cropStyle',
+    'landAreaHa',
+    'code',
+  ];
 
   for (const k of fields) {
     if (!Object.prototype.hasOwnProperty.call(req.body, k)) continue;
 
     let v = req.body[k];
 
-    if (k === 'name' || k === 'address' || k === 'farmLocation' || k === 'mobile') {
+    if (
+      k === 'name' ||
+      k === 'address' ||
+      k === 'farmLocation' ||
+      k === 'mobile'
+    ) {
       v = (v || '').toString().trim();
     }
 
@@ -140,18 +169,49 @@ exports.updateFarmer = async (req, res) => {
 };
 
 exports.deleteFarmer = async (req, res) => {
-  const f = await Farmer.findOneAndDelete({ _id: req.params.id, ownerId: req.user.id });
+  const f = await Farmer.findOneAndDelete({
+    _id: req.params.id,
+    ownerId: req.user.id,
+  });
   if (!f) return res.status(404).json({ error: 'Not found' });
   return res.json({ ok: true });
 };
 
-/* ======== Stubs ======== */
-exports.listUsers = async (_req, res) => res.json([]);
-exports.getUser = async (_req, res) => res.status(404).json({ error: 'Not implemented' });
-exports.updateUser = async (_req, res) => res.status(404).json({ error: 'Not implemented' });
-exports.setRole = async (_req, res) => res.status(404).json({ error: 'Not implemented' });
-exports.resetPassword = async (_req, res) => res.status(404).json({ error: 'Not implemented' });
-exports.deleteUser = async (_req, res) => res.status(404).json({ error: 'Not implemented' });
+/* ================ USERS (ADMIN) ================ */
+
+// GET /api/admin/users[?role=stakeholder]
+exports.listUsers = async (req, res) => {
+  try {
+    const filter = {};
+    if (req.query.role) {
+      filter.role = req.query.role; // e.g. stakeholder, admin, guest
+    }
+
+    const users = await User.find(filter)
+      .select('-passwordHash') // hide password hash
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.json(users);
+  } catch (err) {
+    console.error('[ADMIN listUsers]', err);
+    return res.status(500).json({ error: 'Failed to list users' });
+  }
+};
+
+// placeholders – you can implement later if needed
+exports.getUser = async (_req, res) =>
+  res.status(404).json({ error: 'Not implemented' });
+exports.updateUser = async (_req, res) =>
+  res.status(404).json({ error: 'Not implemented' });
+exports.setRole = async (_req, res) =>
+  res.status(404).json({ error: 'Not implemented' });
+exports.resetPassword = async (_req, res) =>
+  res.status(404).json({ error: 'Not implemented' });
+exports.deleteUser = async (_req, res) =>
+  res.status(404).json({ error: 'Not implemented' });
+
+/* ================ READINGS & STATS (ADMIN) ================ */
 
 exports.listReadings = async (_req, res) => res.json([]);
 exports.getStats = async (_req, res) => res.json({ farmers: 0, readings: 0 });

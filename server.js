@@ -48,6 +48,7 @@ app.use('/api/farmers', require('./routes/farmers')); // farmer + readings CRUD
 app.use('/api/recommend', require('./routes/recommend'));
 app.use('/api/readings', require('./routes/readings'));
 app.use('/api/users', require('./routes/users'));     // ✅ new user route
+app.use('/api/admin', require('./routes/admin'));
 
 /* --- 404 --- */
 app.use((req, res) => {
