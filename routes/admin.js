@@ -18,12 +18,10 @@ router.patch('/farmers/:id', ctrl.updateFarmer);
 router.delete('/farmers/:id', ctrl.deleteFarmer);
 
 // Users (stubs)
-router.get('/users', ctrl.listUsers);
-router.get('/users/:id', ctrl.getUser);
-router.patch('/users/:id', ctrl.updateUser);
-router.patch('/users/:id/role', ctrl.setRole);
-router.post('/users/:id/reset-password', ctrl.resetPassword);
-router.delete('/users/:id', ctrl.deleteUser);
+router.all('/users*', (_req, res) => 
+  res.status(403).json({ error: 'Admin cannot manage users' })
+);
+
 
 // Readings & stats (stubs)
 router.get('/readings', ctrl.listReadings);

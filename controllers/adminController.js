@@ -1,6 +1,5 @@
 // controllers/adminController.js
 const Farmer = require('../models/Farmer');
-const User = require('../models/User'); // ✅ added
 
 /* ---------------- Utils ---------------- */
 function sanitize(f) {
@@ -20,7 +19,7 @@ function sanitize(f) {
   };
 }
 
-const CROP_TYPES  = ['', 'hybrid', 'inbred', 'pareho'];
+const CROP_TYPES = ['', 'hybrid', 'inbred', 'pareho'];
 const CROP_STYLES = ['', 'irrigated', 'rainfed', 'pareho'];
 
 function asNumber(x, def = 0) {
@@ -37,11 +36,9 @@ function cleanCode(s) {
 }
 
 /* ================ FARMERS (ADMIN) ================ */
+
 exports.createFarmer = async (req, res) => {
   try {
-    console.log('[CREATE_FARMER] content-type =', req.headers['content-type']);
-    console.log('[CREATE_FARMER] body =', req.body);
-
     const {
       name,
       address = '',
@@ -92,9 +89,7 @@ exports.createFarmer = async (req, res) => {
       return res.status(409).json({ error: 'Farmer code already exists' });
     }
     console.error('Admin createFarmer error:', err);
-    return res
-      .status(500)
-      .json({ error: 'Failed to create farmer: ' + err.message });
+    return res.status(500).json({ error: 'Failed to create farmer' });
   }
 };
 
@@ -133,14 +128,10 @@ exports.updateFarmer = async (req, res) => {
     let v = req.body[k];
 
     if (
-      k === 'name' ||
-      k === 'address' ||
-      k === 'farmLocation' ||
-      k === 'mobile'
+      ['name', 'address', 'farmLocation', 'mobile'].includes(k)
     ) {
-      v = (v || '').toString().trim();
+      v = (v || '').trim();
     }
-
     if (k === 'cropType') v = CROP_TYPES.includes(v) ? v : '';
     if (k === 'cropStyle') v = CROP_STYLES.includes(v) ? v : '';
     if (k === 'landAreaHa') v = asNumber(v, 0);
@@ -177,39 +168,25 @@ exports.deleteFarmer = async (req, res) => {
   return res.json({ ok: true });
 };
 
-/* ================ USERS (ADMIN) ================ */
+/* ================ USERS — DISABLED FOR OPTION A ================ */
 
-// GET /api/admin/users[?role=stakeholder]
-exports.listUsers = async (req, res) => {
-  try {
-    const filter = {};
-    if (req.query.role) {
-      filter.role = req.query.role; // e.g. stakeholder, admin, guest
-    }
+exports.listUsers = async (_req, res) =>
+  res.status(403).json({ error: 'Admin cannot view users in this system' });
 
-    const users = await User.find(filter)
-      .select('-passwordHash') // hide password hash
-      .sort({ createdAt: -1 })
-      .lean();
-
-    return res.json(users);
-  } catch (err) {
-    console.error('[ADMIN listUsers]', err);
-    return res.status(500).json({ error: 'Failed to list users' });
-  }
-};
-
-// placeholders – you can implement later if needed
 exports.getUser = async (_req, res) =>
-  res.status(404).json({ error: 'Not implemented' });
+  res.status(403).json({ error: 'Not permitted' });
+
 exports.updateUser = async (_req, res) =>
-  res.status(404).json({ error: 'Not implemented' });
+  res.status(403).json({ error: 'Not permitted' });
+
 exports.setRole = async (_req, res) =>
-  res.status(404).json({ error: 'Not implemented' });
+  res.status(403).json({ error: 'Not permitted' });
+
 exports.resetPassword = async (_req, res) =>
-  res.status(404).json({ error: 'Not implemented' });
+  res.status(403).json({ error: 'Not permitted' });
+
 exports.deleteUser = async (_req, res) =>
-  res.status(404).json({ error: 'Not implemented' });
+  res.status(403).json({ error: 'Not permitted' });
 
 /* ================ READINGS & STATS (ADMIN) ================ */
 
