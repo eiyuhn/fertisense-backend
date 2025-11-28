@@ -45,5 +45,7 @@ router.get('/me', auth, ctrl.me);
 router.patch('/me', auth, ctrl.updateMe);
 router.post('/me/photo', auth, upload.single('photo'), ctrl.uploadMyPhoto);
 router.delete('/me/photo', auth, ctrl.deleteMyPhoto);
+router.delete('/me', auth, ctrl.deleteMe);
+
 
 module.exports = router;

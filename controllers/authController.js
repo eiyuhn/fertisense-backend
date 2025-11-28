@@ -177,6 +177,17 @@ exports.deleteMyPhoto = async (req, res) => {
   }
 };
 
+exports.deleteMe = async (req, res) => {
+  try {
+    await User.findByIdAndDelete(req.user.id);
+    return res.json({ ok: true, message: "Account deleted" });
+  } catch (err) {
+    console.error("deleteMe error", err);
+    return res.status(500).json({ error: "Failed to delete account" });
+  }
+};
+
+
 /* 🔐 FORGOT PASSWORD FLOW */
 
 // POST /api/auth/request-password-reset
