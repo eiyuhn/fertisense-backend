@@ -104,16 +104,15 @@ exports.register = async (req, res) => {
 
     const token = signToken(user._id.toString(), user.role);
     return res.status(201).json({ token, user: sanitize(user) });
-  } catch (err) {
+    } catch (err) {
     console.error('Register error:', err);
     if (err.code && err.code === 11000) {
-      // could be username unique conflict
       return res
         .status(409)
         .json({ error: 'Username or email is already in use.' });
     }
     return res.status(500).json({
-      error: 'Failed to register: Please check server logs for details.',
+      error: err && err.message ? err.message : 'Failed to register',
     });
   }
 };

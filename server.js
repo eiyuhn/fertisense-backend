@@ -57,14 +57,18 @@ app.use((req, res) => {
 });
 
 /* --- error handler (shows details in dev) --- */
+/* --- error handler (TEMP: show real message for debugging) --- */
 app.use((err, _req, res, _next) => {
   console.error('[ERROR]', err);
-  const msg =
-    process.env.NODE_ENV === 'production'
-      ? 'Internal Server Error'
-      : err?.stack || err?.message || String(err);
-  res.status(500).json({ error: msg });
+
+  const status = err.status || 500;
+  const message =
+    (err && err.message) ||
+    (typeof err === 'string' ? err : 'Internal Server Error');
+
+  res.status(status).json({ error: message });
 });
+
 
 /* --- start --- */
 const PORT = process.env.PORT || 3000;
