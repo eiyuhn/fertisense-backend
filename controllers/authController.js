@@ -1,7 +1,10 @@
 // controllers/authController.js
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const User = require('../models/User'); // Assuming this is your Mongoose model
+const User = require('../models/User');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret';
+const SALT_ROUNDS = 10;
 
 function sanitize(u) {
   if (!u) return null;
@@ -12,8 +15,9 @@ function sanitize(u) {
 
   return {
     _id: u._id,
+    username: u.username,
     name: u.name,
-    email: u.email,
+    email: u.email || '',
     role: u.role,
     address: u.address || '',
     farmLocation: u.farmLocation || '',
@@ -25,34 +29,66 @@ function sanitize(u) {
 }
 
 function signToken(userId, role) {
-  const secret = process.env.JWT_SECRET || 'dev_secret';
-  return jwt.sign({ id: userId, role }, secret, { expiresIn: '30d' });
+  return jwt.sign({ id: userId, role }, JWT_SECRET, { expiresIn: '30d' });
 }
 
-function generateResetCode() {
-  // 6-digit numeric code
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
-// POST /api/auth/register
+/* -----------------------------------
+ *  REGISTER  (POST /api/auth/register)
+ * ----------------------------------- */
+// body: { username, name, password, role?, address?, farmLocation?, mobile?, email?, securityQuestions? }
 exports.register = async (req, res) => {
   try {
-    const { email, password, name, role, address, farmLocation, mobile } =
-      req.body;
+    const {
+      username,
+      name,
+      password,
+      role,
+      address,
+      farmLocation,
+      mobile,
+      email,
+      securityQuestions = [],
+    } = req.body || {};
 
-    if (!email || !password) {
+    if (!username || !password || !name) {
       return res
         .status(400)
-        .json({ error: 'Email and password are required.' });
+        .json({ error: 'Username, name, and password are required.' });
     }
 
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(password, salt);
+    const normalizedUsername = String(username).trim().toLowerCase();
+    if (!normalizedUsername) {
+      return res.status(400).json({ error: 'Username cannot be empty.' });
+    }
+
+    const existing = await User.findOne({ username: normalizedUsername });
+    if (existing) {
+      return res.status(409).json({ error: 'Username is already taken.' });
+    }
+
+    const passwordHash = await bcrypt.hash(String(password), SALT_ROUNDS);
+
+    // hash security question answers
+    const sqDocs = [];
+    for (const sq of securityQuestions) {
+      if (!sq || !sq.question || !sq.answer) continue;
+      const q = String(sq.question).trim();
+      const a = String(sq.answer).trim().toLowerCase();
+      if (!q || !a) continue;
+      const answerHash = await bcrypt.hash(a, SALT_ROUNDS);
+      sqDocs.push({ question: q, answerHash });
+    }
+
+    if (sqDocs.length < 1) {
+      return res.status(400).json({
+        error: 'At least one security question is required.',
+      });
+    }
 
     const user = await User.create({
-      email: String(email).toLowerCase().trim(),
-      passwordHash,
-      name,
+      username: normalizedUsername,
+      name: name || '',
+      email: email ? String(email).toLowerCase().trim() : undefined,
       role:
         role === 'admin'
           ? 'admin'
@@ -62,6 +98,8 @@ exports.register = async (req, res) => {
       address: address || '',
       farmLocation: farmLocation || '',
       mobile: mobile || '',
+      passwordHash,
+      securityQuestions: sqDocs,
     });
 
     const token = signToken(user._id.toString(), user.role);
@@ -69,9 +107,10 @@ exports.register = async (req, res) => {
   } catch (err) {
     console.error('Register error:', err);
     if (err.code && err.code === 11000) {
+      // could be username unique conflict
       return res
         .status(409)
-        .json({ error: 'This email address is already in use.' });
+        .json({ error: 'Username or email is already in use.' });
     }
     return res.status(500).json({
       error: 'Failed to register: Please check server logs for details.',
@@ -79,15 +118,30 @@ exports.register = async (req, res) => {
   }
 };
 
-// POST /api/auth/login
+/* --------------------------------
+ *  LOGIN  (POST /api/auth/login)
+ * -------------------------------- */
+// body: { username, password }
 exports.login = async (req, res) => {
   try {
-    const user = await User.findOne({
-      email: String(req.body.email).toLowerCase().trim(),
-    });
-    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
-    const ok = await bcrypt.compare(req.body.password, user.passwordHash || '');
-    if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+    const { username, password } = req.body || {};
+
+    if (!username || !password) {
+      return res
+        .status(400)
+        .json({ error: 'Username and password are required.' });
+    }
+
+    const normalizedUsername = String(username).trim().toLowerCase();
+    const user = await User.findOne({ username: normalizedUsername });
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const ok = await bcrypt.compare(String(password), user.passwordHash || '');
+    if (!ok) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
 
     const token = signToken(user._id.toString(), user.role);
     return res.json({ token, user: sanitize(user) });
@@ -97,7 +151,9 @@ exports.login = async (req, res) => {
   }
 };
 
-// GET /api/auth/me
+/* -------------------------------
+ *  ME  (GET /api/auth/me)
+ * ------------------------------- */
 exports.me = async (req, res) => {
   try {
     const u = await User.findById(req.user.id);
@@ -111,7 +167,9 @@ exports.me = async (req, res) => {
   }
 };
 
-// PATCH /api/auth/me
+/* -------------------------------
+ *  UPDATE ME  (PATCH /api/auth/me)
+ * ------------------------------- */
 exports.updateMe = async (req, res) => {
   try {
     const update = {};
@@ -122,6 +180,8 @@ exports.updateMe = async (req, res) => {
       update.farmLocation = req.body.farmLocation.trim();
     if (typeof req.body.mobile === 'string')
       update.mobile = req.body.mobile.trim();
+    if (typeof req.body.email === 'string')
+      update.email = req.body.email.toLowerCase().trim();
 
     const u = await User.findByIdAndUpdate(req.user.id, update, { new: true });
     if (!u) return res.status(404).json({ error: 'Not found' });
@@ -134,6 +194,10 @@ exports.updateMe = async (req, res) => {
       .json({ error: 'Failed to update profile: ' + err.message });
   }
 };
+
+/* -------------------------------
+ *  PHOTO UPLOAD / DELETE
+ * ------------------------------- */
 
 // POST /api/auth/me/photo
 exports.uploadMyPhoto = async (req, res) => {
@@ -177,99 +241,98 @@ exports.deleteMyPhoto = async (req, res) => {
   }
 };
 
+// DELETE /api/auth/me
 exports.deleteMe = async (req, res) => {
   try {
     await User.findByIdAndDelete(req.user.id);
-    return res.json({ ok: true, message: "Account deleted" });
+    return res.json({ ok: true, message: 'Account deleted' });
   } catch (err) {
-    console.error("deleteMe error", err);
-    return res.status(500).json({ error: "Failed to delete account" });
+    console.error('deleteMe error', err);
+    return res.status(500).json({ error: 'Failed to delete account' });
   }
 };
 
+/* -------------------------------------------
+ *  SECURITY QUESTIONS – FORGOT PASSWORD FLOW
+ * ------------------------------------------- */
 
-/* 🔐 FORGOT PASSWORD FLOW */
-
-// POST /api/auth/request-password-reset
-// body: { email, mobile }
-exports.requestPasswordReset = async (req, res) => {
+// POST /api/auth/security-questions
+// body: { username }
+exports.getSecurityQuestions = async (req, res) => {
   try {
-    let { email, mobile } = req.body || {};
-    if (!email || !mobile) {
+    const { username } = req.body || {};
+    if (!username) {
+      return res.status(400).json({ error: 'Username is required.' });
+    }
+
+    const normalizedUsername = String(username).trim().toLowerCase();
+    const user = await User.findOne({ username: normalizedUsername });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    const questions = (user.securityQuestions || []).map((sq, idx) => ({
+      index: idx,
+      question: sq.question,
+    }));
+
+    if (!questions.length) {
       return res
         .status(400)
-        .json({ error: 'Email and mobile number are required.' });
+        .json({ error: 'No security questions set for this user.' });
     }
 
-    email = String(email).toLowerCase().trim();
-    // keep only digits of mobile
-    mobile = String(mobile).replace(/[^0-9]/g, '');
-
-    const user = await User.findOne({ email, mobile });
-    if (!user) {
-      return res.status(404).json({
-        error: 'No account matches that email and mobile number.',
-      });
-    }
-
-    const code = generateResetCode();
-    user.resetCode = code;
-    user.resetCodeExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 min
-    await user.save();
-
-    // TODO: integrate real SMS sending here using user.mobile
-    // For now we just return ok + testCode (only in non-production)
-    const payload = { ok: true, message: 'Reset code generated.' };
-    if (process.env.NODE_ENV !== 'production') {
-      payload.testCode = code; // helpful for dev/testing
-    }
-
-    return res.json(payload);
+    return res.json({ questions });
   } catch (err) {
-    console.error('requestPasswordReset error:', err);
-    return res.status(500).json({
-      error: 'Failed to request password reset: ' + err.message,
-    });
+    console.error('getSecurityQuestions error:', err);
+    return res
+      .status(500)
+      .json({ error: 'Failed to fetch security questions: ' + err.message });
   }
 };
 
 // POST /api/auth/reset-password
-// body: { email, mobile, code, newPassword }
+// body: { username, index, answer, newPassword }
 exports.resetPassword = async (req, res) => {
   try {
-    let { email, mobile, code, newPassword } = req.body || {};
-    if (!email || !mobile || !code || !newPassword) {
+    const { username, index, answer, newPassword } = req.body || {};
+
+    if (!username || index === undefined || !answer || !newPassword) {
       return res.status(400).json({
-        error: 'Email, mobile, code, and new password are required.',
+        error: 'Username, question index, answer, and new password are required.',
       });
     }
 
-    email = String(email).toLowerCase().trim();
-    mobile = String(mobile).replace(/[^0-9]/g, '');
-    code = String(code).trim();
-
-    const user = await User.findOne({ email, mobile });
-    if (!user || !user.resetCode || !user.resetCodeExpires) {
-      return res.status(400).json({ error: 'No reset request found.' });
+    const normalizedUsername = String(username).trim().toLowerCase();
+    const user = await User.findOne({ username: normalizedUsername });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found.' });
     }
 
-    if (user.resetCode !== code) {
-      return res.status(400).json({ error: 'Invalid reset code.' });
+    const stored = user.securityQuestions || [];
+    if (!stored.length) {
+      return res
+        .status(400)
+        .json({ error: 'No security questions set for this user.' });
     }
 
-    if (user.resetCodeExpires.getTime() < Date.now()) {
-      return res.status(400).json({ error: 'Reset code has expired.' });
+    if (index < 0 || index >= stored.length) {
+      return res.status(400).json({ error: 'Invalid question index.' });
     }
 
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(newPassword, salt);
+    const sq = stored[index];
+    const provided = String(answer || '').trim().toLowerCase();
 
-    user.passwordHash = passwordHash;
-    user.resetCode = null;
-    user.resetCodeExpires = null;
+    const ok = await bcrypt.compare(provided, sq.answerHash);
+    if (!ok) {
+      return res.status(401).json({ error: 'Incorrect security answer.' });
+    }
+
+    const newHash = await bcrypt.hash(String(newPassword), SALT_ROUNDS);
+    user.passwordHash = newHash;
     await user.save();
 
-    return res.json({ ok: true, message: 'Password updated successfully.' });
+    return res.json({ success: true, message: 'Password reset successful.' });
   } catch (err) {
     console.error('resetPassword error:', err);
     return res

@@ -1,4 +1,4 @@
-// auth.js
+// routes/auth.js
 const router = require('express').Router();
 const { auth } = require('../utils/auth');
 const ctrl = require('../controllers/authController');
@@ -36,8 +36,8 @@ router.get('/ping', (_req, res) => res.json({ ok: true, route: '/api/auth' }));
 router.post('/register', ctrl.register);
 router.post('/login', ctrl.login);
 
-// 🔐 Forgot password flow (public)
-router.post('/request-password-reset', ctrl.requestPasswordReset);
+// 🔐 Security-question based forgot password flow
+router.post('/security-questions', ctrl.getSecurityQuestions);
 router.post('/reset-password', ctrl.resetPassword);
 
 /* protected */
@@ -46,6 +46,5 @@ router.patch('/me', auth, ctrl.updateMe);
 router.post('/me/photo', auth, upload.single('photo'), ctrl.uploadMyPhoto);
 router.delete('/me/photo', auth, ctrl.deleteMyPhoto);
 router.delete('/me', auth, ctrl.deleteMe);
-
 
 module.exports = router;
