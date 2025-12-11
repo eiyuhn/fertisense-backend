@@ -26,7 +26,17 @@ exports.createReading = async (req, res) => {
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
     const body = req.body || {};
-    const { farmerId, source = 'manual' } = body;
+    const {
+      farmerId,
+      source = 'manual',
+
+      // NEW: accept narrative + plans from frontend
+      recommendationText,
+      englishText,
+      fertilizerPlans,
+      currency,
+    } = body;
+
     const { n, p, k, ph } = pickReadingNumbers(body);
 
     const errors = [];
@@ -41,14 +51,12 @@ exports.createReading = async (req, res) => {
     if (farmerId && !mongoose.isValidObjectId(farmerId)) {
       errors.push('Invalid farmerId');
     }
-    // If you want farmerId to be required for app-created readings, uncomment:
-    // if (!farmerId) errors.push('farmerId is required');
 
     if (errors.length) {
       return res.status(400).json({ error: errors.join(', ') });
     }
 
-    // 1) Save standalone reading document INCLUDING farmerId
+    // 1) Save standalone reading document INCLUDING new fields
     const reading = await Reading.create({
       userId,
       farmerId: farmerId && mongoose.isValidObjectId(farmerId) ? farmerId : undefined,
@@ -57,6 +65,11 @@ exports.createReading = async (req, res) => {
       P: p,
       K: k,
       pH: ph,
+
+      recommendationText,
+      englishText,
+      currency,
+      fertilizerPlans: Array.isArray(fertilizerPlans) ? fertilizerPlans : undefined,
     });
 
     // 2) If valid farmerId is present, also push into embedded readings for that farmer

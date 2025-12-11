@@ -8,7 +8,7 @@ const readingSchema = new mongoose.Schema(
       ref: 'User',
     },
 
-    // 🔹 NEW: link this reading to a specific farmer
+    // link this reading to a specific farmer
     farmerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Farmer',
@@ -24,6 +24,19 @@ const readingSchema = new mongoose.Schema(
     P: Number,
     K: Number,
     pH: Number,
+
+    // NEW: store recommendation + plans so history is not only on the device
+    recommendationText: { type: String },
+    englishText: { type: String },
+    currency: { type: String },
+
+    fertilizerPlans: [
+      {
+        name: String,     // "LGU Option 1"
+        cost: String,     // "PHP 12,345.67"
+        details: [String] // ["Urea: 4.43 bags (221.50 kg)", ...]
+      },
+    ],
   },
   { timestamps: true }
 );

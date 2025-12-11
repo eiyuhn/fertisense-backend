@@ -52,26 +52,26 @@ const IRRI_RATES = {
     // Fallback / sample values – adjust based on your IRRI references
     WET: {
       LIGHT: {
-        N: { low: 100, medium: 80, high: 50 },
+        N: { low: 100, medium: 70, high: 40 },
         P: { low: 60,  medium: 40, high: 20 },
         K: { low: 60,  medium: 40, high: 20 },
       },
       HEAVY: {
-        N: { low: 90, medium: 70, high: 40 },
-        P: { low: 50, medium: 30, high: 20 },
-        K: { low: 50, medium: 30, high: 20 },
+        N: { low: 90, medium: 60, high: 30 },
+        P: { low: 60, medium: 40, high: 20 },
+        K: { low: 60, medium: 40, high: 20 },
       },
     },
     DRY: {
       LIGHT: {
-        N: { low: 90, medium: 70, high: 40 },
-        P: { low: 50, medium: 30, high: 20 },
-        K: { low: 50, medium: 30, high: 20 },
+        N: { low: 120, medium: 90, high: 60 },
+        P: { low: 60, medium: 40, high: 20 },
+        K: { low: 60, medium: 40, high: 20 },
       },
       HEAVY: {
-        N: { low: 80, medium: 60, high: 40 },
-        P: { low: 40, medium: 30, high: 20 },
-        K: { low: 40, medium: 30, high: 20 },
+        N: { low: 100, medium: 70, high: 40 },
+        P: { low: 60, medium: 40, high: 20 },
+        K: { low: 60, medium: 40, high: 20 },
       },
     },
   },
