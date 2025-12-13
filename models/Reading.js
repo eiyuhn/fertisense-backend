@@ -1,42 +1,41 @@
 // models/Reading.js
 const mongoose = require('mongoose');
 
+const FertilizerPlanSchema = new mongoose.Schema(
+  {
+    name: { type: String, default: '' },
+    cost: { type: String, default: '' },
+    details: { type: [String], default: [] },
+  },
+  { _id: false }
+);
+
 const readingSchema = new mongoose.Schema(
   {
-    userId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-    },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 
-    // link this reading to a specific farmer
-    farmerId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Farmer',
-    },
+    // link this reading to a specific farmer (optional)
+    farmerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Farmer', default: null },
 
-    source: {
-      type: String,
-      enum: ['esp32', 'manual'],
-      default: 'manual',
-    },
+    source: { type: String, enum: ['esp32', 'manual'], default: 'manual' },
 
-    N: Number,
-    P: Number,
-    K: Number,
-    pH: Number,
+    N: { type: Number, default: 0 },
+    P: { type: Number, default: 0 },
+    K: { type: Number, default: 0 },
+    pH: { type: Number, default: null },
 
-    // NEW: store recommendation + plans so history is not only on the device
-    recommendationText: { type: String },
-    englishText: { type: String },
-    currency: { type: String },
+    // ✅ stored narrative for History screen
+    recommendationText: { type: String, default: '' },
+    englishText: { type: String, default: '' },
+    currency: { type: String, default: 'PHP' },
 
-    fertilizerPlans: [
-      {
-        name: String,     // "LGU Option 1"
-        cost: String,     // "PHP 12,345.67"
-        details: [String] // ["Urea: 4.43 bags (221.50 kg)", ...]
-      },
-    ],
+    // ✅ stored plan list (History screen expects this)
+    fertilizerPlans: { type: [FertilizerPlanSchema], default: [] },
+
+    // ✅ optional DA debug/store (safe even if you don’t use it yet)
+    daSchedule: { type: mongoose.Schema.Types.Mixed, default: null },
+    daCost: { type: mongoose.Schema.Types.Mixed, default: null },
+    npkClass: { type: String, default: '' },
   },
   { timestamps: true }
 );

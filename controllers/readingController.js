@@ -1,11 +1,10 @@
 // controllers/readingController.js
 const mongoose = require('mongoose');
-const Reading = require('../models/Reading');   // standalone readings (N,P,K,pH)
-const Farmer  = require('../models/Farmer');
+const Reading = require('../models/Reading');
+const Farmer = require('../models/Farmer');
 
 // ---------- Helper: normalize numeric input from various shapes ----------
 function pickReadingNumbers(payload = {}) {
-  // Accept: { n,p,k,ph } OR { N,P,K,pH } OR { npk: { N,P,K } }
   const n = payload.n ?? payload.N ?? payload?.npk?.N ?? payload?.npk?.n;
   const p = payload.p ?? payload.P ?? payload?.npk?.P ?? payload?.npk?.p;
   const k = payload.k ?? payload.K ?? payload?.npk?.K ?? payload?.npk?.k;
@@ -19,6 +18,16 @@ function pickReadingNumbers(payload = {}) {
   };
 }
 
+// ---------- Helper: sanitize plans ----------
+function normalizePlans(rawPlans) {
+  if (!Array.isArray(rawPlans)) return [];
+  return rawPlans.map((p) => ({
+    name: p?.name != null ? String(p.name) : '',
+    cost: p?.cost != null ? String(p.cost) : '',
+    details: Array.isArray(p?.details) ? p.details.map((x) => String(x)) : [],
+  }));
+}
+
 // ---------- Create single reading (optionally linked to a farmer) ----------
 exports.createReading = async (req, res) => {
   try {
@@ -30,11 +39,16 @@ exports.createReading = async (req, res) => {
       farmerId,
       source = 'manual',
 
-      // NEW: accept narrative + plans from frontend
-      recommendationText,
-      englishText,
-      fertilizerPlans,
-      currency,
+      // narrative + plans
+      recommendationText = '',
+      englishText = '',
+      fertilizerPlans = [],
+      currency = 'PHP',
+
+      // ✅ optional DA fields (won’t break if not sent)
+      daSchedule = null,
+      daCost = null,
+      npkClass = '',
     } = body;
 
     const { n, p, k, ph } = pickReadingNumbers(body);
@@ -43,42 +57,39 @@ exports.createReading = async (req, res) => {
     if (!Number.isFinite(n)) errors.push('N must be a number');
     if (!Number.isFinite(p)) errors.push('P must be a number');
     if (!Number.isFinite(k)) errors.push('K must be a number');
-    if (ph !== undefined && !Number.isFinite(ph)) {
-      errors.push('pH must be a number if provided');
-    }
+    if (ph !== undefined && !Number.isFinite(ph)) errors.push('pH must be a number if provided');
 
-    // Validate farmerId if present
-    if (farmerId && !mongoose.isValidObjectId(farmerId)) {
-      errors.push('Invalid farmerId');
-    }
+    if (farmerId && !mongoose.isValidObjectId(farmerId)) errors.push('Invalid farmerId');
 
-    if (errors.length) {
-      return res.status(400).json({ error: errors.join(', ') });
-    }
+    if (errors.length) return res.status(400).json({ error: errors.join(', ') });
 
-    // 1) Save standalone reading document INCLUDING new fields
+    const safePlans = normalizePlans(fertilizerPlans);
+
+    // 1) Save reading (MongoDB Reading collection)
     const reading = await Reading.create({
       userId,
-      farmerId: farmerId && mongoose.isValidObjectId(farmerId) ? farmerId : undefined,
+      farmerId: farmerId && mongoose.isValidObjectId(farmerId) ? farmerId : null,
       source,
       N: n,
       P: p,
       K: k,
       pH: ph,
 
-      recommendationText,
-      englishText,
-      currency,
-      fertilizerPlans: Array.isArray(fertilizerPlans) ? fertilizerPlans : undefined,
+      recommendationText: String(recommendationText || ''),
+      englishText: String(englishText || ''),
+      currency: String(currency || 'PHP'),
+      fertilizerPlans: safePlans,
+
+      daSchedule,
+      daCost,
+      npkClass: String(npkClass || ''),
     });
 
-    // 2) If valid farmerId is present, also push into embedded readings for that farmer
+    // 2) If farmerId present, also push into embedded Farmer.readings[]
     let embedded;
     if (farmerId && mongoose.isValidObjectId(farmerId)) {
       const farmer = await Farmer.findOne({ _id: farmerId, ownerId: userId });
-      if (!farmer) {
-        return res.status(404).json({ error: 'Farmer not found for this user' });
-      }
+      if (!farmer) return res.status(404).json({ error: 'Farmer not found for this user' });
 
       farmer.readings.push({
         source: source === 'esp32' ? 'esp32' : 'manual',
@@ -123,11 +134,7 @@ exports.listReadingsByFarmer = async (req, res) => {
       return res.status(400).json({ error: 'Invalid farmerId' });
     }
 
-    const items = await Reading.find({
-      userId: req.user.id,
-      farmerId,
-    }).sort({ createdAt: -1 });
-
+    const items = await Reading.find({ userId: req.user.id, farmerId }).sort({ createdAt: -1 });
     return res.json(items);
   } catch (e) {
     console.error('[listReadingsByFarmer] error:', e);
@@ -138,10 +145,7 @@ exports.listReadingsByFarmer = async (req, res) => {
 // ---------- Get single reading by id ----------
 exports.getReading = async (req, res) => {
   try {
-    const r = await Reading.findOne({
-      _id: req.params.id,
-      userId: req.user.id,
-    });
+    const r = await Reading.findOne({ _id: req.params.id, userId: req.user.id });
     if (!r) return res.status(404).json({ error: 'Not found' });
     res.json(r);
   } catch (e) {
@@ -153,10 +157,7 @@ exports.getReading = async (req, res) => {
 // ---------- Delete single reading by id ----------
 exports.deleteReading = async (req, res) => {
   try {
-    const r = await Reading.findOneAndDelete({
-      _id: req.params.id,
-      userId: req.user.id,
-    });
+    const r = await Reading.findOneAndDelete({ _id: req.params.id, userId: req.user.id });
     if (!r) return res.status(404).json({ error: 'Not found' });
     res.json({ ok: true });
   } catch (e) {
@@ -179,13 +180,8 @@ exports.addReadingBatch = async (req, res) => {
       return res.status(400).json({ message: 'Invalid farmerId' });
     }
 
-    const farmer = await Farmer.findOne({
-      _id: farmerId,
-      ownerId: req.user.id,
-    });
-    if (!farmer) {
-      return res.status(404).json({ message: 'Farmer not found' });
-    }
+    const farmer = await Farmer.findOne({ _id: farmerId, ownerId: req.user.id });
+    if (!farmer) return res.status(404).json({ message: 'Farmer not found' });
 
     const clean = points.map((pRaw) => {
       const { n, p, k, ph } = pickReadingNumbers(pRaw);
@@ -201,53 +197,29 @@ exports.addReadingBatch = async (req, res) => {
       };
     });
 
-    const sum = (arr, key) =>
-      arr.reduce((a, x) => a + (Number(x[key]) || 0), 0);
+    const sum = (arr, key) => arr.reduce((a, x) => a + (Number(x[key]) || 0), 0);
     const arr = (key) => clean.map((x) => Number(x[key] ?? 0));
 
     const avg = {
       n: +(sum(clean, 'n') / clean.length).toFixed(1),
       p: +(sum(clean, 'p') / clean.length).toFixed(1),
       k: +(sum(clean, 'k') / clean.length).toFixed(1),
-      ph: clean.some((x) => x.ph != null)
-        ? +(sum(clean, 'ph') / clean.length).toFixed(2)
-        : undefined,
+      ph: clean.some((x) => x.ph != null) ? +(sum(clean, 'ph') / clean.length).toFixed(2) : undefined,
       moisture: clean.some((x) => x.moisture != null)
         ? +(sum(clean, 'moisture') / clean.length).toFixed(1)
         : undefined,
     };
 
-    const min = {
-      n: Math.min(...arr('n')),
-      p: Math.min(...arr('p')),
-      k: Math.min(...arr('k')),
-    };
-    const max = {
-      n: Math.max(...arr('n')),
-      p: Math.max(...arr('p')),
-      k: Math.max(...arr('k')),
-    };
+    const min = { n: Math.min(...arr('n')), p: Math.min(...arr('p')), k: Math.min(...arr('k')) };
+    const max = { n: Math.max(...arr('n')), p: Math.max(...arr('p')), k: Math.max(...arr('k')) };
     const batchId = Date.now().toString(36);
 
     clean.forEach((pt) => farmer.readings.push({ ...pt, batchId }));
     if (!farmer.readingSummaries) farmer.readingSummaries = [];
-    farmer.readingSummaries.push({
-      batchId,
-      count: clean.length,
-      meta,
-      avg,
-      min,
-      max,
-      createdAt: new Date(),
-    });
+    farmer.readingSummaries.push({ batchId, count: clean.length, meta, avg, min, max, createdAt: new Date() });
 
     await farmer.save();
-    res.json({
-      ok: true,
-      batchId,
-      count: clean.length,
-      summary: { avg, min, max },
-    });
+    res.json({ ok: true, batchId, count: clean.length, summary: { avg, min, max } });
   } catch (e) {
     console.error('[addReadingBatch] error:', e);
     res.status(500).json({ error: 'Failed to save batch' });

@@ -1,379 +1,195 @@
 // controllers/recommendController.js
 const PriceSettings = require('../models/PriceSettings');
+const { classifyN, classifyP, classifyK } = require('../utils/npkThresholds');
 
 /**
- * Approx. conversion:
- *  1 ppm ≈ 2 kg/ha (0–20 cm soil depth, bulk density ~1.3 g/cm³)
+ * DA-style Nutrient Requirement (kg/ha) for RICE HYBRID
+ * N: L=120, M=90, H=60
+ * P: L=60,  M=45, H=20
+ * K: L=60,  M=45, H=30
  */
-const PPM_TO_KG_HA = 2.0;
-
-/** IRRI-style classification thresholds (sensor values are in ppm) */
-const IRRI_THRESHOLDS = {
-  N: { lowMax: 40, mediumMax: 80 },     // 0–40 low, 41–80 medium, >80 high
-  P: { lowMax: 10, mediumMax: 20 },     // 0–10 low, 11–20 medium, >20 high
-  K: { lowMax: 80, mediumMax: 150 },    // 0–80 low, 81–150 medium, >150 high
+const DA_RICE_HYBRID_REQ = {
+  N: { L: 120, M: 90, H: 60 },
+  P: { L: 60,  M: 45, H: 20 },
+  K: { L: 60,  M: 45, H: 30 },
 };
 
-/**
- * IRRI fertilizer recommendations (kg/ha of N, P, K) by category
- * ✳️ FILL THESE using your official tables where needed.
- * Below: example from your "Hybrid, Wet Season, Light Soils" table.
- */
-const IRRI_RATES = {
-  HYBRID: {
-    WET: {
-      LIGHT: {
-        N: { low: 120, medium: 90, high: 60 },
-        P: { low: 70,  medium: 50, high: 30 },
-        K: { low: 70,  medium: 50, high: 30 },
-      },
-      HEAVY: {
-        // TODO: replace with correct values from your table
-        N: { low: 100, medium: 80, high: 50 },
-        P: { low: 60,  medium: 40, high: 20 },
-        K: { low: 60,  medium: 40, high: 20 },
-      },
-    },
-    DRY: {
-      // TODO: replace with dry-season values (if you have them)
-      LIGHT: {
-        N: { low: 100, medium: 80, high: 50 },
-        P: { low: 60,  medium: 40, high: 20 },
-        K: { low: 60,  medium: 40, high: 20 },
-      },
-      HEAVY: {
-        N: { low: 90, medium: 70, high: 40 },
-        P: { low: 50, medium: 30, high: 20 },
-        K: { low: 50, medium: 30, high: 20 },
-      },
-    },
-  },
-  INBRED: {
-    // Fallback / sample values – adjust based on your IRRI references
-    WET: {
-      LIGHT: {
-        N: { low: 100, medium: 70, high: 40 },
-        P: { low: 60,  medium: 40, high: 20 },
-        K: { low: 60,  medium: 40, high: 20 },
-      },
-      HEAVY: {
-        N: { low: 90, medium: 60, high: 30 },
-        P: { low: 60, medium: 40, high: 20 },
-        K: { low: 60, medium: 40, high: 20 },
-      },
-    },
-    DRY: {
-      LIGHT: {
-        N: { low: 120, medium: 90, high: 60 },
-        P: { low: 60, medium: 40, high: 20 },
-        K: { low: 60, medium: 40, high: 20 },
-      },
-      HEAVY: {
-        N: { low: 100, medium: 70, high: 40 },
-        P: { low: 60, medium: 40, high: 20 },
-        K: { low: 60, medium: 40, high: 20 },
-      },
-    },
-  },
+// ================= DA BAG RULES =================
+
+// K via 0-0-60 at basal
+function basalBagsForK(kClass) {
+  if (kClass === 'H') return 1;
+  if (kClass === 'M') return 1.5;
+  return 2; // L
+}
+
+// P via basal
+function basalForP(pClass) {
+  if (pClass === 'H') return [{ code: '16-20-0', bags: 2 }];
+  if (pClass === 'M') return [{ code: '18-46-0', bags: 2 }];
+  return [{ code: '18-46-0', bags: 2.5 }]; // L
+}
+
+// N via split urea
+function splitUreaForN(nClass) {
+  if (nClass === 'L') return { after30DAT: 2, topdress: 2 };
+  if (nClass === 'M') return { after30DAT: 1.5, topdress: 1.5 };
+  return { after30DAT: 1, topdress: 1 }; // H
+}
+
+function toClass(x) {
+  const v = String(x || '').trim().toUpperCase();
+  return ['L', 'M', 'H'].includes(v) ? v : null;
+}
+
+function buildRule(nClass, pClass, kClass, areaHa = 1) {
+  const req = {
+    N: DA_RICE_HYBRID_REQ.N[nClass],
+    P: DA_RICE_HYBRID_REQ.P[pClass],
+    K: DA_RICE_HYBRID_REQ.K[kClass],
+  };
+
+  const basal = [
+    { code: '0-0-60', bags: basalBagsForK(kClass) * areaHa },
+    ...basalForP(pClass).map(x => ({ ...x, bags: x.bags * areaHa })),
+  ];
+
+  const split = splitUreaForN(nClass);
+
+  return {
+    npkClass: `${nClass}${pClass}${kClass}`,
+    nutrientRequirementKgHa: req,
+    organic: [{ code: 'ORGANIC', bags: 10 * areaHa }],
+    basal,
+    after30DAT: [{ code: '46-0-0', bags: split.after30DAT * areaHa }],
+    topdress60DBH: [{ code: '46-0-0', bags: split.topdress * areaHa }],
+  };
+}
+
+// Pre-generate 27 rules
+const DA_RULES_RICE_HYBRID = (() => {
+  const levels = ['L', 'M', 'H'];
+  const map = new Map();
+  for (const n of levels)
+    for (const p of levels)
+      for (const k of levels) {
+        const r = buildRule(n, p, k, 1);
+        map.set(r.npkClass, r);
+      }
+  return map;
+})();
+
+// ================= PRICE MAPPING =================
+
+const PRICE_KEY_BY_CODE = {
+  '46-0-0': 'UREA_46_0_0',
+  '18-46-0': 'DAP_18_46_0',
+  '16-20-0': 'NPK_16_20_0',
+  '0-0-60': 'MOP_0_0_60',
+  '14-14-14': 'NPK_14_14_14',
+  '21-0-0': 'AMMOSUL_21_0_0',
 };
 
 function money(x) {
   return Math.round((x || 0) * 100) / 100;
 }
-function subtotalBags(bags, pricePerBag) {
-  return money((bags || 0) * (pricePerBag || 0));
-}
 
-function classifyLevel(valuePpm, thr) {
-  if (valuePpm <= thr.lowMax) return 'low';
-  if (valuePpm <= thr.mediumMax) return 'medium';
-  return 'high';
-}
-
-function safeGetRates(riceType, season, soilType) {
-  const type = (riceType || 'HYBRID').toUpperCase();
-  const seas = (season || 'WET').toUpperCase();
-  const soil = (soilType || 'LIGHT').toUpperCase();
-
-  const byType = IRRI_RATES[type] || IRRI_RATES.HYBRID;
-  const bySeason = (byType && byType[seas]) || byType.WET;
-  const bySoil = (bySeason && bySeason[soil]) || bySeason.LIGHT;
-
-  return bySoil;
-}
-
-function phStatus(ph) {
-  if (ph == null || isNaN(ph)) return 'unknown';
-  if (ph < 5.5) return 'acidic';
-  if (ph > 7.5) return 'alkaline';
-  return 'neutral';
-}
-
-/**
- * Build fertilizer plans using current price settings + IRRI NPK targets.
- * Uses your PriceSettings.items entries (npk%, bagKg, pricePerBag).
- */
-function buildPlansFromTargets(targetN, targetP, targetK, priceDoc, areaHa = 1) {
+// 🔧 FIXED: areaHa applied ONLY ONCE
+function calcScheduleCost(schedule, priceDoc) {
   const itemsMap = Object.fromEntries(priceDoc.items.entries());
   const currency = priceDoc.currency || 'PHP';
 
-  function needKg(nutrientKgHa) {
-    return nutrientKgHa * (areaHa || 1);
+  function itemFor(code) {
+    const key = PRICE_KEY_BY_CODE[code];
+    return key ? itemsMap[key] || null : null;
   }
 
-  function getItem(code) {
-    const item = itemsMap[code];
-    if (!item) throw new Error(`Missing fertilizer item in PriceSettings: ${code}`);
-    return item;
-  }
+  const allLines = [
+    ...schedule.basal.map(x => ({ phase: 'BASAL', ...x })),
+    ...schedule.after30DAT.map(x => ({ phase: '30 DAT', ...x })),
+    ...schedule.topdress60DBH.map(x => ({ phase: 'TOPDRESS', ...x })),
+  ];
 
-  // --- Plan 1: Straight Fertilizers (Urea, SSP, MOP) ---
-  function makePlanStraight() {
-    const urea = getItem('UREA_46_0_0');
-    const ssp  = getItem('SSP_0_16_0');
-    const mop  = getItem('MOP_0_0_60');
+  const rows = allLines.map(line => {
+    const item = itemFor(line.code);
+    const pricePerBag = item?.pricePerBag ?? null;
+    const subtotal = pricePerBag == null ? null : money(pricePerBag * line.bags);
+    return {
+      phase: line.phase,
+      code: line.code,
+      bags: line.bags,
+      pricePerBag,
+      subtotal,
+    };
+  });
 
-    const nKg = needKg(targetN);
-    const pKg = needKg(targetP);
-    const kKg = needKg(targetK);
-
-    const ureaKg = urea.npk.N > 0 ? nKg / (urea.npk.N / 100) : 0;
-    const sspKg  = ssp.npk.P  > 0 ? pKg / (ssp.npk.P  / 100) : 0;
-    const mopKg  = mop.npk.K  > 0 ? kKg / (mop.npk.K  / 100) : 0;
-
-    const ureaBags = Math.ceil(ureaKg / urea.bagKg);
-    const sspBags  = Math.ceil(sspKg  / ssp.bagKg);
-    const mopBags  = Math.ceil(mopKg  / mop.bagKg);
-
-    const rows = [
-      {
-        key: 'UREA_46_0_0',
-        label: urea.label,
-        bags: ureaBags,
-        pricePerBag: urea.pricePerBag,
-        subtotal: subtotalBags(ureaBags, urea.pricePerBag),
-      },
-      {
-        key: 'SSP_0_16_0',
-        label: ssp.label,
-        bags: sspBags,
-        pricePerBag: ssp.pricePerBag,
-        subtotal: subtotalBags(sspBags, ssp.pricePerBag),
-      },
-      {
-        key: 'MOP_0_0_60',
-        label: mop.label,
-        bags: mopBags,
-        pricePerBag: mop.pricePerBag,
-        subtotal: subtotalBags(mopBags, mop.pricePerBag),
-      },
-    ];
-
-    const total = money(rows.reduce((a, r) => a + r.subtotal, 0));
-    return { code: 'plan1', title: 'Straight Fertilizers', rows, total, currency };
-  }
-
-  // --- Plan 2: DAP-based (DAP covers P + some N, then Urea + MOP) ---
-  function makePlanDAP() {
-    const dap  = getItem('DAP_18_46_0');
-    const urea = getItem('UREA_46_0_0');
-    const mop  = getItem('MOP_0_0_60');
-
-    const nKg = needKg(targetN);
-    const pKg = needKg(targetP);
-    const kKg = needKg(targetK);
-
-    const dapKg = dap.npk.P > 0 ? pKg / (dap.npk.P / 100) : 0;
-    const nFromDAP = dapKg * (dap.npk.N / 100);
-    const nRemaining = Math.max(0, nKg - nFromDAP);
-
-    const ureaKg = urea.npk.N > 0 ? nRemaining / (urea.npk.N / 100) : 0;
-    const mopKg  = mop.npk.K  > 0 ? kKg / (mop.npk.K  / 100) : 0;
-
-    const dapBags  = Math.ceil(dapKg  / dap.bagKg);
-    const ureaBags = Math.ceil(ureaKg / urea.bagKg);
-    const mopBags  = Math.ceil(mopKg  / mop.bagKg);
-
-    const rows = [
-      {
-        key: 'DAP_18_46_0',
-        label: dap.label,
-        bags: dapBags,
-        pricePerBag: dap.pricePerBag,
-        subtotal: subtotalBags(dapBags, dap.pricePerBag),
-      },
-      {
-        key: 'UREA_46_0_0',
-        label: urea.label,
-        bags: ureaBags,
-        pricePerBag: urea.pricePerBag,
-        subtotal: subtotalBags(ureaBags, urea.pricePerBag),
-      },
-      {
-        key: 'MOP_0_0_60',
-        label: mop.label,
-        bags: mopBags,
-        pricePerBag: mop.pricePerBag,
-        subtotal: subtotalBags(mopBags, mop.pricePerBag),
-      },
-    ];
-
-    const total = money(rows.reduce((a, r) => a + r.subtotal, 0));
-    return { code: 'plan2', title: 'DAP + Urea + MOP', rows, total, currency };
-  }
-
-  // --- Plan 3: NPK complete + Urea top-up ---
-  function makePlanNPK() {
-    // You can use either NPK_14_14_14 or COMPLETE_14_14_14 depending on your seed
-    const npk  = itemsMap['NPK_14_14_14'] || itemsMap['COMPLETE_14_14_14'];
-    const urea = getItem('UREA_46_0_0');
-
-    if (!npk) {
-      // If NPK is not defined, skip this plan
-      return null;
-    }
-
-    const nKg = needKg(targetN);
-    const pKg = needKg(targetP);
-    const kKg = needKg(targetK);
-
-    const npkN = npk.npk.N / 100;
-    const npkP = npk.npk.P / 100;
-    const npkK = npk.npk.K / 100;
-
-    // kg of NPK to cover the max of N/P/K demand
-    const npkKg = Math.max(
-      npkN > 0 ? nKg / npkN : 0,
-      npkP > 0 ? pKg / npkP : 0,
-      npkK > 0 ? kKg / npkK : 0
-    );
-
-    const nFromNPK = npkKg * npkN;
-    const nRemaining = Math.max(0, nKg - nFromNPK);
-    const ureaKg = urea.npk.N > 0 ? nRemaining / (urea.npk.N / 100) : 0;
-
-    const npkBags  = Math.ceil(npkKg  / npk.bagKg);
-    const ureaBags = Math.ceil(ureaKg / urea.bagKg);
-
-    const rows = [
-      {
-        key: npk.code || 'NPK_14_14_14',
-        label: npk.label,
-        bags: npkBags,
-        pricePerBag: npk.pricePerBag,
-        subtotal: subtotalBags(npkBags, npk.pricePerBag),
-      },
-      {
-        key: 'UREA_46_0_0',
-        label: urea.label,
-        bags: ureaBags,
-        pricePerBag: urea.pricePerBag,
-        subtotal: subtotalBags(ureaBags, urea.pricePerBag),
-      },
-    ];
-
-    const total = money(rows.reduce((a, r) => a + r.subtotal, 0));
-    return { code: 'plan3', title: 'Complete (NPK) + Urea', rows, total, currency };
-  }
-
-  const plans = [];
-  try { plans.push(makePlanStraight()); } catch (e) { console.warn('Plan1 error:', e.message); }
-  try { plans.push(makePlanDAP()); } catch (e) { console.warn('Plan2 error:', e.message); }
-  try {
-    const p3 = makePlanNPK();
-    if (p3) plans.push(p3);
-  } catch (e) {
-    console.warn('Plan3 error:', e.message);
-  }
-
-  return plans;
+  const total = money(rows.reduce((sum, r) => sum + (r.subtotal || 0), 0));
+  return { currency, rows, total };
 }
+
+// ================= CONTROLLER =================
 
 exports.recommend = async (req, res) => {
   try {
-    // Sensor-based inputs in **ppm**
-    // n, p, k are from soil test (NPK in ppm)
     const {
-      n = 0,
-      p = 0,
-      k = 0,
-      ph,
-      season,
-      riceType,
-      soilType,
+      n = null,
+      p = null,
+      k = null,
+      nClass = null,
+      pClass = null,
+      kClass = null,
+      crop = 'rice_hybrid',
       areaHa = 1,
     } = req.body || {};
 
-    const nPpm = Number(n) || 0;
-    const pPpm = Number(p) || 0;
-    const kPpm = Number(k) || 0;
-    const phVal = ph != null ? Number(ph) : undefined;
-
-    const nLevel = classifyLevel(nPpm, IRRI_THRESHOLDS.N);
-    const pLevel = classifyLevel(pPpm, IRRI_THRESHOLDS.P);
-    const kLevel = classifyLevel(kPpm, IRRI_THRESHOLDS.K);
-
-    const rates = safeGetRates(riceType, season, soilType);
-
-    const targetN = rates.N[nLevel];
-    const targetP = rates.P[pLevel];
-    const targetK = rates.K[kLevel];
-
-    const phStat = phStatus(phVal);
-
-    // Friendly narrative
-    const englishText = [
-      `Based on the soil test, Nitrogen is ${nLevel.toUpperCase()}, Phosphorus is ${pLevel.toUpperCase()}, and Potassium is ${kLevel.toUpperCase()}.`,
-      `For a ${ (riceType || 'hybrid').toLowerCase() } rice field (${(season || 'wet').toLowerCase()} season, ${(soilType || 'light').toLowerCase()} soil), IRRI-based recommendation is:`,
-      `N ≈ ${targetN} kg/ha, P ≈ ${targetP} kg/ha, K ≈ ${targetK} kg/ha.`,
-      phVal != null
-        ? `Soil pH is ${phVal.toFixed(1)} (${phStat}).`
-        : `Soil pH was not provided.`,
-    ].join(' ');
-
-    const tagalogText = [
-      `Batay sa soil test, ang Nitrogen ay ${nLevel.toUpperCase()}, ang Phosphorus ay ${pLevel.toUpperCase()}, at ang Potassium ay ${kLevel.toUpperCase()}.`,
-      `Para sa ${ (riceType || 'hybrid').toLowerCase() } na palay sa ${ (season || 'wet').toLowerCase() } season at ${(soilType || 'light').toLowerCase()} na lupa, inirerekomenda na:`,
-      `N ≈ ${targetN} kg/ha, P ≈ ${targetP} kg/ha, K ≈ ${targetK} kg/ha.`,
-      phVal != null
-        ? `Ang pH ng lupa ay ${phVal.toFixed(1)} (${phStat}).`
-        : `Walang naitalang pH ng lupa.`,
-    ].join(' ');
-
-    // Load price settings for fertilizer plans
-    const priceDoc = await PriceSettings.ensureSeeded();
-    const plans = buildPlansFromTargets(targetN, targetP, targetK, priceDoc, areaHa);
-
-    let cheapest = null;
-    if (plans.length > 0) {
-      cheapest = plans.reduce((a, b) => (a.total <= b.total ? a : b), plans[0]);
+    if (String(crop).toLowerCase() !== 'rice_hybrid') {
+      return res.status(400).json({
+        ok: false,
+        error: 'Only rice_hybrid is supported.',
+      });
     }
 
-    res.json({
+    const N = toClass(nClass) || classifyN(n);
+    const P = toClass(pClass) || classifyP(p);
+    const K = toClass(kClass) || classifyK(k);
+
+    if (!N || !P || !K) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Provide nClass/pClass/kClass (L/M/H) or valid ppm values.',
+      });
+    }
+
+    const npkClass = `${N}${P}${K}`;
+    const baseRule = DA_RULES_RICE_HYBRID.get(npkClass);
+    if (!baseRule) {
+      return res.status(404).json({ ok: false, error: `No rule for ${npkClass}` });
+    }
+
+    const schedule = buildRule(N, P, K, Number(areaHa) || 1);
+
+    let cost = null;
+    try {
+      const priceDoc = await PriceSettings.ensureSeeded();
+      cost = calcScheduleCost(schedule, priceDoc);
+    } catch {
+      cost = null;
+    }
+
+    return res.json({
       ok: true,
+      crop: 'rice_hybrid',
+      classified: { N, P, K, npkClass },
       input: {
-        nPpm,
-        pPpm,
-        kPpm,
-        ph: phVal,
-        season: season || 'WET',
-        riceType: riceType || 'HYBRID',
-        soilType: soilType || 'LIGHT',
-        areaHa,
-        // For debugging view:
-        nKgHaApprox: nPpm * PPM_TO_KG_HA,
-        pKgHaApprox: pPpm * PPM_TO_KG_HA,
-        kKgHaApprox: kPpm * PPM_TO_KG_HA,
-        levels: { N: nLevel, P: pLevel, K: kLevel },
-        targetsKgHa: { N: targetN, P: targetP, K: targetK },
+        nPpm: n != null ? Number(n) : null,
+        pPpm: p != null ? Number(p) : null,
+        kPpm: k != null ? Number(k) : null,
+        areaHa: Number(areaHa) || 1,
       },
-      narrative: { en: englishText, tl: tagalogText },
-      plans,
-      cheapest: cheapest
-        ? { code: cheapest.code, total: cheapest.total, currency: cheapest.currency }
-        : null,
-      currency: priceDoc.currency || 'PHP',
-      updatedAt: priceDoc.updatedAt,
+      nutrientRequirementKgHa: schedule.nutrientRequirementKgHa,
+      schedule,
+      cost,
+      note: 'DA fixed-rule fertilizer recommendation (Basal + 30 DAT + Topdress).',
     });
   } catch (e) {
     console.error('[recommend] error:', e);
