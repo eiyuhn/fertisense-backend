@@ -1,3 +1,4 @@
+// routes/admin.js
 const router = require('express').Router();
 const { auth, requireRole } = require('../utils/auth');
 const ctrl = require('../controllers/adminController');
@@ -17,13 +18,10 @@ router.get('/farmers/:id', ctrl.getFarmer);
 router.patch('/farmers/:id', ctrl.updateFarmer);
 router.delete('/farmers/:id', ctrl.deleteFarmer);
 
-// Users (stubs)
-router.all('/users*', (_req, res) => 
-  res.status(403).json({ error: 'Admin cannot manage users' })
-);
 
+router.get('/stakeholders', ctrl.listStakeholders);
 
-// Readings & stats (stubs)
+// Readings & stats
 router.get('/readings', ctrl.listReadings);
 router.get('/stats', ctrl.getStats);
 

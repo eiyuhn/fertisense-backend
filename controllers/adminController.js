@@ -1,5 +1,6 @@
 // controllers/adminController.js
 const Farmer = require('../models/Farmer');
+const User = require('../models/User');
 
 /* ---------------- Utils ---------------- */
 function sanitize(f) {
@@ -67,8 +68,7 @@ exports.createFarmer = async (req, res) => {
         ownerId: req.user.id,
         code: safeCode,
       }).lean();
-      if (exists)
-        return res.status(409).json({ error: 'Farmer code already exists' });
+      if (exists) return res.status(409).json({ error: 'Farmer code already exists' });
     }
 
     const doc = await Farmer.create({
@@ -94,17 +94,12 @@ exports.createFarmer = async (req, res) => {
 };
 
 exports.listFarmers = async (req, res) => {
-  const items = await Farmer.find({ ownerId: req.user.id }).sort({
-    createdAt: -1,
-  });
+  const items = await Farmer.find({ ownerId: req.user.id }).sort({ createdAt: -1 });
   return res.json(items.map(sanitize));
 };
 
 exports.getFarmer = async (req, res) => {
-  const f = await Farmer.findOne({
-    _id: req.params.id,
-    ownerId: req.user.id,
-  });
+  const f = await Farmer.findOne({ _id: req.params.id, ownerId: req.user.id });
   if (!f) return res.status(404).json({ error: 'Not found' });
   return res.json(sanitize(f));
 };
@@ -127,9 +122,7 @@ exports.updateFarmer = async (req, res) => {
 
     let v = req.body[k];
 
-    if (
-      ['name', 'address', 'farmLocation', 'mobile'].includes(k)
-    ) {
+    if (['name', 'address', 'farmLocation', 'mobile'].includes(k)) {
       v = (v || '').trim();
     }
     if (k === 'cropType') v = CROP_TYPES.includes(v) ? v : '';
@@ -160,35 +153,36 @@ exports.updateFarmer = async (req, res) => {
 };
 
 exports.deleteFarmer = async (req, res) => {
-  const f = await Farmer.findOneAndDelete({
-    _id: req.params.id,
-    ownerId: req.user.id,
-  });
+  const f = await Farmer.findOneAndDelete({ _id: req.params.id, ownerId: req.user.id });
   if (!f) return res.status(404).json({ error: 'Not found' });
   return res.json({ ok: true });
 };
 
-/* ================ USERS — DISABLED FOR OPTION A ================ */
+/* ================ STAKEHOLDERS LIST (ADMIN) ================ */
+// GET /api/admin/stakeholders
+exports.listStakeholders = async (_req, res) => {
+  try {
+    const users = await User.find({ role: 'stakeholder' })
+      .select('_id username name')
+      .sort({ createdAt: -1 });
 
-exports.listUsers = async (_req, res) =>
-  res.status(403).json({ error: 'Admin cannot view users in this system' });
-
-exports.getUser = async (_req, res) =>
-  res.status(403).json({ error: 'Not permitted' });
-
-exports.updateUser = async (_req, res) =>
-  res.status(403).json({ error: 'Not permitted' });
-
-exports.setRole = async (_req, res) =>
-  res.status(403).json({ error: 'Not permitted' });
-
-exports.resetPassword = async (_req, res) =>
-  res.status(403).json({ error: 'Not permitted' });
-
-exports.deleteUser = async (_req, res) =>
-  res.status(403).json({ error: 'Not permitted' });
+    return res.json({
+      count: users.length,
+      users: users.map((u) => ({
+        _id: u._id,
+        username: u.username || '',
+        name: u.name || '',
+      })),
+    });
+  } catch (err) {
+    console.error('listStakeholders error:', err);
+    return res.status(500).json({
+      error: err?.message || 'Failed to fetch stakeholders',
+    });
+  }
+};
 
 /* ================ READINGS & STATS (ADMIN) ================ */
-
+// keep your stubs for now
 exports.listReadings = async (_req, res) => res.json([]);
 exports.getStats = async (_req, res) => res.json({ farmers: 0, readings: 0 });
