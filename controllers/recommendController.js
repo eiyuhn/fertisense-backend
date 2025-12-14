@@ -10,11 +10,11 @@ const { classifyN, classifyP, classifyK } = require('../utils/npkThresholds');
  */
 const DA_RICE_HYBRID_REQ = {
   N: { L: 120, M: 90, H: 60 },
-  P: { L: 60, M: 45, H: 20 },
-  K: { L: 60, M: 45, H: 30 },
+  P: { L: 60,  M: 45, H: 20 },
+  K: { L: 60,  M: 45, H: 30 },
 };
 
-// ================= DA BAG RULES (your existing fixed rule) =================
+// ================= DA BAG RULES (UNCHANGED) =================
 
 // K via 0-0-60 at basal
 function basalBagsForK(kClass) {
@@ -51,7 +51,7 @@ function buildDaRuleSchedule(nClass, pClass, kClass, areaHa = 1) {
 
   const basal = [
     { code: '0-0-60', bags: basalBagsForK(kClass) * areaHa },
-    ...basalForP(pClass).map((x) => ({ ...x, bags: x.bags * areaHa })),
+    ...basalForP(pClass).map(x => ({ ...x, bags: x.bags * areaHa })),
   ];
 
   const split = splitUreaForN(nClass);
@@ -59,7 +59,7 @@ function buildDaRuleSchedule(nClass, pClass, kClass, areaHa = 1) {
   return {
     npkClass: `${nClass}${pClass}${kClass}`,
     nutrientRequirementKgHa: req,
-    organic: [], // keep empty to match your UI
+    organic: [], // keep empty
     basal,
     after30DAT: [{ code: '46-0-0', bags: split.after30DAT * areaHa }],
     topdress60DBH: [{ code: '46-0-0', bags: split.topdress * areaHa }],
@@ -78,7 +78,7 @@ const PRICE_KEY_BY_CODE = {
 };
 
 function money(x) {
-  return Math.round((Number(x || 0) + Number.EPSILON) * 100) / 100;
+  return Math.round((x || 0) * 100) / 100;
 }
 
 function roundBags(x) {
@@ -88,17 +88,12 @@ function roundBags(x) {
 function mapPriceItems(priceDoc) {
   const itemsMap = Object.fromEntries(priceDoc.items.entries());
   function itemFor(code) {
-    const key = PRICE_KEY_BY_CODE[String(code)];
+    const key = PRICE_KEY_BY_CODE[code];
     return key ? itemsMap[key] || null : null;
   }
-  return { itemsMap, itemFor, currency: priceDoc.currency || 'PHP' };
+  return { itemFor, currency: priceDoc.currency || 'PHP' };
 }
 
-/**
- * Returns nutrient kg delivered per 1 bag, based on PriceSettings.
- * NOTE: we treat npk as percent (%).
- * Example: 18-46-0 bagKg=50 -> P per bag = 50*(46/100)=23 kg P per bag
- */
 function nutrientKgPerBag(code, priceDoc) {
   const { itemFor } = mapPriceItems(priceDoc);
   const item = itemFor(code);
@@ -118,24 +113,22 @@ function nutrientKgPerBag(code, priceDoc) {
   };
 }
 
-// cost calc (kept)
 function calcScheduleCost(schedule, priceDoc) {
   const { itemFor, currency } = mapPriceItems(priceDoc);
 
   const allLines = [
-    ...(schedule.basal || []).map((x) => ({ phase: 'BASAL', ...x })),
-    ...(schedule.after30DAT || []).map((x) => ({ phase: '30 DAT', ...x })),
-    ...(schedule.topdress60DBH || []).map((x) => ({ phase: 'TOPDRESS', ...x })),
+    ...(schedule.basal || []).map(x => ({ phase: 'BASAL', ...x })),
+    ...(schedule.after30DAT || []).map(x => ({ phase: '30 DAT', ...x })),
+    ...(schedule.topdress60DBH || []).map(x => ({ phase: 'TOPDRESS', ...x })),
   ];
 
-  const rows = allLines.map((line) => {
+  const rows = allLines.map(line => {
     const item = itemFor(line.code);
     const pricePerBag = item?.pricePerBag ?? null;
-    const subtotal =
-      pricePerBag == null ? null : money(pricePerBag * Number(line.bags || 0));
+    const subtotal = pricePerBag == null ? null : money(pricePerBag * Number(line.bags || 0));
     return {
       phase: line.phase,
-      code: line.code,
+      code: String(line.code),
       bags: Number(line.bags || 0),
       pricePerBag,
       subtotal,
@@ -146,103 +139,95 @@ function calcScheduleCost(schedule, priceDoc) {
   return { currency, rows, total };
 }
 
-// ================= ALT PLAN BUILDER (CHEAPER COMBOS) =================
-// Builds schedules that meet the same kg requirements, but with different mixes.
-// ✅ FIXED: No "|| 1" fallback (prevents 45/120 bags explosion).
-// ✅ If nutrient per bag is 0, plan returns null (invalid plan).
+// ================= ALT PLAN (2 alternatives) =================
+// Goal: meet nutrient requirement with different fertilizer combos.
+// We compute basal bags to meet P + K, then fill remaining N using UREA (or other N source).
 
-function buildAltPlan_Template({
+function buildAltPlan({
   id,
-  title,
   label,
   areaHa,
-  reqKgHa, // {N,P,K} per hectare
-  basalMix, // [{code, role:'P'|'K'|'PK'}]
-  nSourceCode, // code to supply remaining N split
+  reqKgHa,     // per ha: {N,P,K}
+  pSourceCode, // '18-46-0' or '16-20-0'
+  kSourceCode, // '0-0-60'
+  nSourceCode, // '46-0-0'
   priceDoc,
 }) {
+  // If price config missing, return a “fallback” plan (still 3 plans show)
+  const pPerBag = nutrientKgPerBag(pSourceCode, priceDoc);
+  const kPerBag = nutrientKgPerBag(kSourceCode, priceDoc);
+  const nPerBag = nutrientKgPerBag(nSourceCode, priceDoc);
+
+  if (!pPerBag || !kPerBag || !nPerBag) {
+    return {
+      id,
+      title: 'Fertilizer Plan',
+      label,
+      isDa: false,
+      isCheapest: false,
+      schedule: { organic: [], basal: [], after30DAT: [], topdress60DBH: [] },
+      cost: null,
+      warning: 'Missing price settings for some fertilizer codes.',
+    };
+  }
+
+  // total requirement for the area
   const req = {
-    N: Number(reqKgHa.N || 0) * Number(areaHa || 1),
-    P: Number(reqKgHa.P || 0) * Number(areaHa || 1),
-    K: Number(reqKgHa.K || 0) * Number(areaHa || 1),
+    N: Number(reqKgHa.N || 0) * areaHa,
+    P: Number(reqKgHa.P || 0) * areaHa,
+    K: Number(reqKgHa.K || 0) * areaHa,
   };
 
-  // safety: must exist in price settings
-  const checkCodes = [...basalMix.map((x) => x.code), nSourceCode];
-  for (const c of checkCodes) {
-    const perBag = nutrientKgPerBag(c, priceDoc);
-    if (!perBag) return null;
-  }
+  // bags to meet P and K at basal
+  const pBags = roundBags(req.P / (pPerBag.P || 1));
+  const kBags = roundBags(req.K / (kPerBag.K || 1));
 
-  const basal = [];
-  const supplied = { N: 0, P: 0, K: 0 };
+  // nutrients supplied by basal
+  const supplied = {
+    N: (pBags * pPerBag.N) + (kBags * kPerBag.N),
+    P: (pBags * pPerBag.P) + (kBags * kPerBag.P),
+    K: (pBags * pPerBag.K) + (kBags * kPerBag.K),
+  };
 
-  for (const part of basalMix) {
-    const perBag = nutrientKgPerBag(part.code, priceDoc);
-    if (!perBag) return null;
-
-    let bags = 0;
-
-    if (part.role === 'P') {
-      if (!perBag.P || perBag.P <= 0) return null; // ✅ critical fix
-      bags = req.P / perBag.P;
-    } else if (part.role === 'K') {
-      if (!perBag.K || perBag.K <= 0) return null; // ✅ critical fix
-      bags = req.K / perBag.K;
-    } else if (part.role === 'PK') {
-      const canP = perBag.P > 0;
-      const canK = perBag.K > 0;
-      if (!canP && !canK) return null;
-
-      const needP = canP ? req.P / perBag.P : 0;
-      const needK = canK ? req.K / perBag.K : 0;
-      bags = Math.max(needP, needK);
-    } else {
-      bags = 0;
-    }
-
-    bags = roundBags(bags);
-
-    // don’t store 0 lines
-    if (bags > 0) basal.push({ code: part.code, bags });
-
-    supplied.N += bags * (perBag.N || 0);
-    supplied.P += bags * (perBag.P || 0);
-    supplied.K += bags * (perBag.K || 0);
-  }
-
-  // Remaining N must be filled by N source
-  const nPerBag = nutrientKgPerBag(nSourceCode, priceDoc);
-  if (!nPerBag || !nPerBag.N || nPerBag.N <= 0) return null; // ✅ critical fix
-
+  // remaining N (split into 2 applications)
   const remainingN = Math.max(0, req.N - supplied.N);
-  const nBagsTotal = remainingN / nPerBag.N;
+  const totalNBags = roundBags(remainingN / (nPerBag.N || 1));
 
-  const after30 = roundBags(nBagsTotal / 2);
-  const topdress = roundBags(nBagsTotal / 2);
-
-  const after30DAT = after30 > 0 ? [{ code: nSourceCode, bags: after30 }] : [];
-  const topdress60DBH =
-    topdress > 0 ? [{ code: nSourceCode, bags: topdress }] : [];
+  const after30 = roundBags(totalNBags / 2);
+  const topdress = roundBags(totalNBags / 2);
 
   const schedule = {
     organic: [],
-    basal,
-    after30DAT,
-    topdress60DBH,
+    basal: [
+      { code: pSourceCode, bags: pBags },
+      { code: kSourceCode, bags: kBags },
+    ],
+    after30DAT: after30 > 0 ? [{ code: nSourceCode, bags: after30 }] : [],
+    topdress60DBH: topdress > 0 ? [{ code: nSourceCode, bags: topdress }] : [],
   };
 
   const cost = calcScheduleCost(schedule, priceDoc);
 
   return {
     id,
-    title,
+    title: 'Fertilizer Plan',
     label,
     isDa: false,
     isCheapest: false,
     schedule,
     cost,
   };
+}
+
+function sortPlansCheapestFirst(plans) {
+  // push null-cost plans to the bottom
+  return plans.sort((a, b) => {
+    const ta = a?.cost?.total;
+    const tb = b?.cost?.total;
+    const na = typeof ta === 'number' ? ta : Number.POSITIVE_INFINITY;
+    const nb = typeof tb === 'number' ? tb : Number.POSITIVE_INFINITY;
+    return na - nb;
+  });
 }
 
 // ================= CONTROLLER =================
@@ -261,10 +246,7 @@ exports.recommend = async (req, res) => {
     } = req.body || {};
 
     if (String(crop).toLowerCase() !== 'rice_hybrid') {
-      return res.status(400).json({
-        ok: false,
-        error: 'Only rice_hybrid is supported.',
-      });
+      return res.status(400).json({ ok: false, error: 'Only rice_hybrid is supported.' });
     }
 
     const N = toClass(nClass) || classifyN(n);
@@ -278,18 +260,20 @@ exports.recommend = async (req, res) => {
       });
     }
 
-    const npkClass = `${N}${P}${K}`;
     const area = Number(areaHa) || 1;
+    const npkClass = `${N}${P}${K}`;
 
+    // requirement per hectare (based on class)
     const reqKgHa = {
       N: DA_RICE_HYBRID_REQ.N[N],
       P: DA_RICE_HYBRID_REQ.P[P],
       K: DA_RICE_HYBRID_REQ.K[K],
     };
 
+    // load prices
     const priceDoc = await PriceSettings.ensureSeeded();
 
-    // 1) DA plan (fixed rule)
+    // --- 1) DA plan (UNCHANGED logic) ---
     const daSchedule = buildDaRuleSchedule(N, P, K, area);
     const daCost = calcScheduleCost(daSchedule, priceDoc);
 
@@ -308,95 +292,42 @@ exports.recommend = async (req, res) => {
       cost: daCost,
     };
 
-    // 2) Alternatives (equivalent nutrients)
-    const altA = buildAltPlan_Template({
-      id: 'ALT_DAP_MOP_UREA',
-      title: 'Fertilizer Plan',
+    // --- 2) Alternative A ---
+    const altA = buildAltPlan({
+      id: 'ALT_A_DAP_MOP_UREA',
       label: 'Alternative (DAP + MOP + Urea)',
       areaHa: area,
       reqKgHa,
-      basalMix: [
-        { code: '18-46-0', role: 'P' },
-        { code: '0-0-60', role: 'K' },
-      ],
+      pSourceCode: '18-46-0',
+      kSourceCode: '0-0-60',
       nSourceCode: '46-0-0',
       priceDoc,
     });
 
-    const altB = buildAltPlan_Template({
-      id: 'ALT_16_20_0_MOP_UREA',
-      title: 'Fertilizer Plan',
+    // --- 3) Alternative B ---
+    const altB = buildAltPlan({
+      id: 'ALT_B_16_20_0_MOP_UREA',
       label: 'Alternative (16-20-0 + MOP + Urea)',
       areaHa: area,
       reqKgHa,
-      basalMix: [
-        { code: '16-20-0', role: 'P' },
-        { code: '0-0-60', role: 'K' },
-      ],
+      pSourceCode: '16-20-0',
+      kSourceCode: '0-0-60',
       nSourceCode: '46-0-0',
       priceDoc,
     });
 
-    const altC = buildAltPlan_Template({
-      id: 'ALT_14_14_14_UREA',
-      title: 'Fertilizer Plan',
-      label: 'Alternative (14-14-14 + Urea)',
-      areaHa: area,
-      reqKgHa,
-      basalMix: [{ code: '14-14-14', role: 'PK' }],
-      nSourceCode: '46-0-0',
-      priceDoc,
-    });
+    // ALWAYS return exactly 3 plans
+    let plans = [daPlan, altA, altB];
 
-    const altD = buildAltPlan_Template({
-      id: 'ALT_14_14_14_AMMOSUL',
-      title: 'Fertilizer Plan',
-      label: 'Alternative (14-14-14 + Ammosul)',
-      areaHa: area,
-      reqKgHa,
-      basalMix: [{ code: '14-14-14', role: 'PK' }],
-      nSourceCode: '21-0-0',
-      priceDoc,
-    });
+    // Sort by cheapest
+    plans = sortPlansCheapestFirst(plans);
 
-    const allPlansRaw = [daPlan, altA, altB, altC, altD].filter(Boolean);
-
-    // Deduplicate by schedule signature
-    const signature = (plan) => {
-      const s = plan.schedule || {};
-      const norm = (arr) =>
-        (arr || [])
-          .map((x) => `${String(x.code)}:${roundBags(x.bags)}`)
-          .sort()
-          .join('|');
-      return [
-        'B:' + norm(s.basal),
-        '30:' + norm(s.after30DAT),
-        'T:' + norm(s.topdress60DBH),
-      ].join('::');
-    };
-
-    const seen = new Set();
-    const uniquePlans = [];
-    for (const p of allPlansRaw) {
-      const sig = signature(p);
-      if (seen.has(sig)) continue;
-      seen.add(sig);
-      uniquePlans.push(p);
+    // Mark cheapest (only if it has a numeric total)
+    if (plans.length) {
+      plans.forEach(p => (p.isCheapest = false));
+      const firstTotal = plans[0]?.cost?.total;
+      if (typeof firstTotal === 'number') plans[0].isCheapest = true;
     }
-
-    // Sort by total cost (cheapest first)
-    uniquePlans.sort((a, b) => {
-      const ta = Number(a?.cost?.total ?? Number.POSITIVE_INFINITY);
-      const tb = Number(b?.cost?.total ?? Number.POSITIVE_INFINITY);
-      return ta - tb;
-    });
-
-    // Mark cheapest
-    if (uniquePlans.length) uniquePlans[0].isCheapest = true;
-
-    // Return top 3 cheapest
-    const top3 = uniquePlans.slice(0, 3);
 
     return res.json({
       ok: true,
@@ -409,15 +340,20 @@ exports.recommend = async (req, res) => {
         areaHa: area,
       },
       nutrientRequirementKgHa: reqKgHa,
-      plans: top3,
-      cheapest: top3.length
-        ? {
-            id: top3[0].id,
-            total: top3[0].cost?.total ?? 0,
-            currency: top3[0].cost?.currency || 'PHP',
-          }
-        : null,
-      note: 'Generated 3 fertilizer plans sorted by cheapest total cost. DA plan included as a labeled option.',
+
+      // ✅ NEW: your app uses this
+      plans,
+
+      // ✅ keep backward compatible fields too
+      schedule: daPlan.schedule,
+      cost: daPlan.cost,
+
+      cheapest:
+        plans.length && typeof plans[0]?.cost?.total === 'number'
+          ? { id: plans[0].id, total: plans[0].cost.total, currency: plans[0].cost.currency }
+          : null,
+
+      note: 'Returned 3 fertilizer plans (DA + 2 alternatives), sorted cheapest-first.',
     });
   } catch (e) {
     console.error('[recommend] error:', e);
