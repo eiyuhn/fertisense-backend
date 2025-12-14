@@ -68,13 +68,24 @@ function resolvePriceItem(priceDoc, code) {
 
     // label has triple matching
     const labelNpk = parseTripleAny(label);
-    if (want && labelNpk && labelNpk.N === want.N && labelNpk.P === want.P && labelNpk.K === want.K) {
+    if (
+      want &&
+      labelNpk &&
+      labelNpk.N === want.N &&
+      labelNpk.P === want.P &&
+      labelNpk.K === want.K
+    ) {
       return { key: k, item: v };
     }
 
     // stored npk matches
     const npk = v.npk || {};
-    if (want && Number(npk.N) === want.N && Number(npk.P) === want.P && Number(npk.K) === want.K) {
+    if (
+      want &&
+      Number(npk.N) === want.N &&
+      Number(npk.P) === want.P &&
+      Number(npk.K) === want.K
+    ) {
       return { key: k, item: v };
     }
   }
@@ -82,7 +93,7 @@ function resolvePriceItem(priceDoc, code) {
   return null;
 }
 
-// ✅ cost calc: NEVER treat missing as 0; subtotal=null if missing
+// ✅ cost calc: NEVER treat missing as 0; subtotal=null if missing, total sums ONLY priced items
 function calcScheduleCost(schedule, priceDoc, areaHa = 1) {
   const rows = [];
   let total = 0;
@@ -104,8 +115,8 @@ function calcScheduleCost(schedule, priceDoc, areaHa = 1) {
       rows.push({
         phase,
         code,
-        key: resolved?.key || null,            // helpful for debugging
-        label: item?.label || code,            // readable
+        key: resolved?.key || null,
+        label: item?.label || code,
         bags,
         pricePerBag,
         subtotal,
@@ -118,6 +129,11 @@ function calcScheduleCost(schedule, priceDoc, areaHa = 1) {
   add('TOPDRESS', schedule.topdress60DBH);
 
   return { currency: priceDoc.currency, rows, total };
+}
+
+// cheapest-sort helper: avoid tagging "missing prices" as cheapest
+function hasMissingPrices(cost) {
+  return (cost?.rows || []).some((r) => r.pricePerBag == null);
 }
 
 // ---------- alternative schedules ----------
@@ -156,29 +172,63 @@ const PLAN_LIBRARY = {
   }),
 };
 
+// ✅ DA 27-combo schedule table (Rice Hybrid) — matches your earlier table
+const DA_SCHEDULE_TABLE = {
+  // N = LOW
+  LLL: { basal: [{ code: '0-0-60', bags: 2.0 }, { code: '18-46-0', bags: 2.5 }], after30DAT: [{ code: '46-0-0', bags: 2.0 }], topdress60DBH: [{ code: '46-0-0', bags: 2.0 }] },
+  LLM: { basal: [{ code: '0-0-60', bags: 1.5 }, { code: '18-46-0', bags: 2.5 }], after30DAT: [{ code: '46-0-0', bags: 2.0 }], topdress60DBH: [{ code: '46-0-0', bags: 2.0 }] },
+  LLH: { basal: [{ code: '0-0-60', bags: 1.0 }, { code: '18-46-0', bags: 2.5 }], after30DAT: [{ code: '46-0-0', bags: 2.0 }], topdress60DBH: [{ code: '46-0-0', bags: 2.0 }] },
+
+  LML: { basal: [{ code: '0-0-60', bags: 2.0 }, { code: '18-46-0', bags: 2.0 }], after30DAT: [{ code: '46-0-0', bags: 2.0 }], topdress60DBH: [{ code: '46-0-0', bags: 2.0 }] },
+  LMM: { basal: [{ code: '0-0-60', bags: 1.5 }, { code: '18-46-0', bags: 2.0 }], after30DAT: [{ code: '46-0-0', bags: 2.0 }], topdress60DBH: [{ code: '46-0-0', bags: 2.0 }] },
+  LMH: { basal: [{ code: '0-0-60', bags: 1.0 }, { code: '18-46-0', bags: 2.0 }], after30DAT: [{ code: '46-0-0', bags: 2.0 }], topdress60DBH: [{ code: '46-0-0', bags: 2.0 }] },
+
+  LHL: { basal: [{ code: '0-0-60', bags: 2.0 }, { code: '16-20-0', bags: 2.0 }], after30DAT: [{ code: '46-0-0', bags: 2.0 }], topdress60DBH: [{ code: '46-0-0', bags: 2.0 }] },
+  LHM: { basal: [{ code: '0-0-60', bags: 1.5 }, { code: '16-20-0', bags: 2.0 }], after30DAT: [{ code: '46-0-0', bags: 2.0 }], topdress60DBH: [{ code: '46-0-0', bags: 2.0 }] },
+  LHH: { basal: [{ code: '0-0-60', bags: 1.0 }, { code: '16-20-0', bags: 2.0 }], after30DAT: [{ code: '46-0-0', bags: 2.0 }], topdress60DBH: [{ code: '46-0-0', bags: 2.0 }] },
+
+  // N = MEDIUM
+  MLL: { basal: [{ code: '0-0-60', bags: 2.0 }, { code: '18-46-0', bags: 2.5 }], after30DAT: [{ code: '46-0-0', bags: 1.5 }], topdress60DBH: [{ code: '46-0-0', bags: 1.5 }] },
+  MLM: { basal: [{ code: '0-0-60', bags: 1.5 }, { code: '18-46-0', bags: 2.5 }], after30DAT: [{ code: '46-0-0', bags: 1.5 }], topdress60DBH: [{ code: '46-0-0', bags: 1.5 }] },
+  MLH: { basal: [{ code: '0-0-60', bags: 1.0 }, { code: '18-46-0', bags: 2.5 }], after30DAT: [{ code: '46-0-0', bags: 1.5 }], topdress60DBH: [{ code: '46-0-0', bags: 1.5 }] },
+
+  MML: { basal: [{ code: '0-0-60', bags: 2.0 }, { code: '18-46-0', bags: 2.0 }], after30DAT: [{ code: '46-0-0', bags: 1.5 }], topdress60DBH: [{ code: '46-0-0', bags: 1.5 }] },
+  MMM: { basal: [{ code: '0-0-60', bags: 1.5 }, { code: '18-46-0', bags: 2.0 }], after30DAT: [{ code: '46-0-0', bags: 1.5 }], topdress60DBH: [{ code: '46-0-0', bags: 1.5 }] },
+  MMH: { basal: [{ code: '0-0-60', bags: 1.0 }, { code: '18-46-0', bags: 2.0 }], after30DAT: [{ code: '46-0-0', bags: 1.5 }], topdress60DBH: [{ code: '46-0-0', bags: 1.5 }] },
+
+  MHL: { basal: [{ code: '0-0-60', bags: 2.0 }, { code: '16-20-0', bags: 2.0 }], after30DAT: [{ code: '46-0-0', bags: 1.5 }], topdress60DBH: [{ code: '46-0-0', bags: 1.5 }] },
+  MHM: { basal: [{ code: '0-0-60', bags: 1.5 }, { code: '16-20-0', bags: 2.0 }], after30DAT: [{ code: '46-0-0', bags: 1.5 }], topdress60DBH: [{ code: '46-0-0', bags: 1.5 }] },
+  MHH: { basal: [{ code: '0-0-60', bags: 1.0 }, { code: '16-20-0', bags: 2.0 }], after30DAT: [{ code: '46-0-0', bags: 1.5 }], topdress60DBH: [{ code: '46-0-0', bags: 1.5 }] },
+
+  // N = HIGH
+  HLL: { basal: [{ code: '0-0-60', bags: 2.0 }, { code: '18-46-0', bags: 2.5 }], after30DAT: [{ code: '46-0-0', bags: 1.0 }], topdress60DBH: [{ code: '46-0-0', bags: 1.0 }] },
+  HLM: { basal: [{ code: '0-0-60', bags: 1.5 }, { code: '18-46-0', bags: 2.5 }], after30DAT: [{ code: '46-0-0', bags: 1.0 }], topdress60DBH: [{ code: '46-0-0', bags: 1.0 }] },
+  HLH: { basal: [{ code: '0-0-60', bags: 1.0 }, { code: '18-46-0', bags: 2.5 }], after30DAT: [{ code: '46-0-0', bags: 1.0 }], topdress60DBH: [{ code: '46-0-0', bags: 1.0 }] },
+
+  HML: { basal: [{ code: '0-0-60', bags: 2.0 }, { code: '18-46-0', bags: 2.0 }], after30DAT: [{ code: '46-0-0', bags: 1.0 }], topdress60DBH: [{ code: '46-0-0', bags: 1.0 }] },
+  HMM: { basal: [{ code: '0-0-60', bags: 1.5 }, { code: '18-46-0', bags: 2.0 }], after30DAT: [{ code: '46-0-0', bags: 1.0 }], topdress60DBH: [{ code: '46-0-0', bags: 1.0 }] },
+  HMH: { basal: [{ code: '0-0-60', bags: 1.0 }, { code: '18-46-0', bags: 2.0 }], after30DAT: [{ code: '46-0-0', bags: 1.0 }], topdress60DBH: [{ code: '46-0-0', bags: 1.0 }] },
+
+  HHL: { basal: [{ code: '0-0-60', bags: 2.0 }, { code: '16-20-0', bags: 2.0 }], after30DAT: [{ code: '46-0-0', bags: 1.0 }], topdress60DBH: [{ code: '46-0-0', bags: 1.0 }] },
+  HHM: { basal: [{ code: '0-0-60', bags: 1.5 }, { code: '16-20-0', bags: 2.0 }], after30DAT: [{ code: '46-0-0', bags: 1.0 }], topdress60DBH: [{ code: '46-0-0', bags: 1.0 }] },
+  HHH: { basal: [{ code: '0-0-60', bags: 1.0 }, { code: '16-20-0', bags: 2.0 }], after30DAT: [{ code: '46-0-0', bags: 1.0 }], topdress60DBH: [{ code: '46-0-0', bags: 1.0 }] },
+};
+
 // ---------- controller ----------
 exports.recommend = async (req, res) => {
   try {
     const { nClass, pClass, kClass, areaHa = 1 } = req.body || {};
 
-    const N = nClass || 'L';
-    const P = pClass || 'L';
-    const K = kClass || 'L';
+    // ✅ IMPORTANT: normalize to "L/M/H" no matter what app sends
+    const N = String(nClass || 'L').trim().toUpperCase()[0] || 'L';
+    const P = String(pClass || 'L').trim().toUpperCase()[0] || 'L';
+    const K = String(kClass || 'L').trim().toUpperCase()[0] || 'L';
     const npkClass = `${N}${P}${K}`;
 
-    // ✅ IMPORTANT: ensureSeeded must be the repaired+merged version
-    // that auto-adds missing DAP/MOP and fixes wrong Urea key.
     const priceDoc = await PriceSettings.ensureSeeded();
 
-    // --- DA PLAN ---
-    const daSchedule = {
-      basal: [
-        { code: '0-0-60', bags: 2 },
-        { code: '18-46-0', bags: 2.5 },
-      ],
-      after30DAT: [{ code: '46-0-0', bags: 2 }],
-      topdress60DBH: [{ code: '46-0-0', bags: 2 }],
-    };
+    // --- DA PLAN (depends on class) ---
+    const daSchedule = DA_SCHEDULE_TABLE[npkClass] || DA_SCHEDULE_TABLE.LLL;
 
     const daPlan = {
       id: 'DA_RULE',
@@ -190,14 +240,18 @@ exports.recommend = async (req, res) => {
       cost: calcScheduleCost(daSchedule, priceDoc, areaHa),
     };
 
-    // --- ALTERNATIVES ---
+    // --- ALTERNATIVES (from LMH table) ---
     const rule = LMH_TABLE[npkClass] || null;
 
     const alt1Schedule =
-      rule?.alt1 && PLAN_LIBRARY[rule.alt1] ? PLAN_LIBRARY[rule.alt1]() : PLAN_LIBRARY.DAP_MOP_UREA();
+      rule?.alt1 && PLAN_LIBRARY[rule.alt1]
+        ? PLAN_LIBRARY[rule.alt1]()
+        : PLAN_LIBRARY.DAP_MOP_UREA();
 
     const alt2Schedule =
-      rule?.alt2 && PLAN_LIBRARY[rule.alt2] ? PLAN_LIBRARY[rule.alt2]() : PLAN_LIBRARY.DAP_MOP_AMMOSUL();
+      rule?.alt2 && PLAN_LIBRARY[rule.alt2]
+        ? PLAN_LIBRARY[rule.alt2]()
+        : PLAN_LIBRARY.DAP_MOP_AMMOSUL();
 
     const alt1 = {
       id: 'ALT_1',
@@ -221,8 +275,15 @@ exports.recommend = async (req, res) => {
 
     const plans = [daPlan, alt1, alt2];
 
-    // ✅ cheapest sort: all totals are numbers now (only real priced items are summed)
-    plans.sort((a, b) => Number(a?.cost?.total || 0) - Number(b?.cost?.total || 0));
+    // ✅ best cheapest sort: "missing prices" go last
+    plans.sort((a, b) => {
+      const am = hasMissingPrices(a.cost);
+      const bm = hasMissingPrices(b.cost);
+      if (am !== bm) return am ? 1 : -1;
+      return Number(a?.cost?.total ?? Number.POSITIVE_INFINITY) - Number(b?.cost?.total ?? Number.POSITIVE_INFINITY);
+    });
+
+    plans.forEach((p) => (p.isCheapest = false));
     if (plans.length) plans[0].isCheapest = true;
 
     res.json({
