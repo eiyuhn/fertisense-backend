@@ -1,4 +1,4 @@
-// fertisense-backend/models/PriceSettings.js
+// models/PriceSettings.js
 const mongoose = require('mongoose');
 
 const PriceItemSchema = new mongoose.Schema(
@@ -25,10 +25,9 @@ const PriceSettingsSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// ---------- helpers ----------
+// helpers
 function parseNpkFromText(text) {
   const s = String(text || '');
-  // matches "46-0-0", "(14-14-14)", "18 - 46 - 0"
   const m = s.match(/(\d{1,2})\s*-\s*(\d{1,2})\s*-\s*(\d{1,2})/);
   if (!m) return null;
   return { N: Number(m[1]), P: Number(m[2]), K: Number(m[3]) };
@@ -40,7 +39,6 @@ function canonicalKeyFromNpk(npk) {
   const P = Number(npk.P || 0);
   const K = Number(npk.K || 0);
 
-  // canonical codes used by your app
   if (N === 46 && P === 0 && K === 0) return 'UREA_46_0_0';
   if (N === 18 && P === 46 && K === 0) return 'DAP_18_46_0';
   if (N === 0 && P === 0 && K === 60) return 'MOP_0_0_60';
@@ -48,7 +46,6 @@ function canonicalKeyFromNpk(npk) {
   if (N === 16 && P === 20 && K === 0) return 'NPK_16_20_0';
   if (N === 14 && P === 14 && K === 14) return 'NPK_14_14_14';
 
-  // generic fallback
   return `NPK_${N}_${P}_${K}`;
 }
 
@@ -72,11 +69,10 @@ PriceSettingsSchema.statics.ensureSeeded = async function () {
         ['AMMOSUL_21_0_0', { label: '21-0-0 (Ammosul)', pricePerBag: 680, bagKg: 50, npk: { N: 21, P: 0, K: 0 }, active: true }],
       ]),
     });
-
     return doc;
   }
 
-  // ✅ AUTO-REPAIR existing docs like yours (npk=0 + weird keys)
+  // auto-repair
   const cur = doc.items instanceof Map ? doc.items : new Map(Object.entries(doc.items || {}));
   const next = new Map();
   let changed = false;
@@ -86,7 +82,6 @@ PriceSettingsSchema.statics.ensureSeeded = async function () {
 
     const label = String(rawVal.label || rawKey);
 
-    // infer npk if empty
     let npk = rawVal.npk;
     if (npkLooksEmpty(npk)) {
       const parsed = parseNpkFromText(rawKey) || parseNpkFromText(label);

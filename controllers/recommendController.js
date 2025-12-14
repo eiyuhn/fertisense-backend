@@ -1,25 +1,83 @@
+// controllers/recommendController.js
 const PriceSettings = require('../models/PriceSettings');
 const LMH_TABLE = require('../utils/lmhTable');
 
 // ---------- helpers ----------
-const calcScheduleCost = (schedule, priceDoc) => {
+function parseTriple(code) {
+  const m = String(code || '').match(/(\d{1,2})\s*-\s*(\d{1,2})\s*-\s*(\d{1,2})/);
+  if (!m) return null;
+  return { N: Number(m[1]), P: Number(m[2]), K: Number(m[3]) };
+}
+
+// dash-code -> canonical key in PriceSettings.items
+function canonicalKeyFromDashCode(dashCode) {
+  const npk = parseTriple(dashCode);
+  if (!npk) return null;
+
+  const { N, P, K } = npk;
+
+  if (N === 46 && P === 0 && K === 0) return 'UREA_46_0_0';
+  if (N === 18 && P === 46 && K === 0) return 'DAP_18_46_0';
+  if (N === 0 && P === 0 && K === 60) return 'MOP_0_0_60';
+  if (N === 21 && P === 0 && K === 0) return 'AMMOSUL_21_0_0';
+  if (N === 16 && P === 20 && K === 0) return 'NPK_16_20_0';
+  if (N === 14 && P === 14 && K === 14) return 'NPK_14_14_14';
+
+  return `NPK_${N}_${P}_${K}`;
+}
+
+// ✅ robust resolver for any input code
+function resolvePriceItem(priceDoc, code) {
+  if (!priceDoc?.items) return null;
+
+  const items = priceDoc.items; // Map
+
+  // 1) exact key
+  if (items.get(code)) return { key: code, item: items.get(code) };
+
+  // 2) dash code -> canonical key
+  const canon = canonicalKeyFromDashCode(code);
+  if (canon && items.get(canon)) return { key: canon, item: items.get(canon) };
+
+  // 3) try generic underscore key (rare)
+  const unders = String(code).replace(/-/g, '_').toUpperCase();
+  if (items.get(unders)) return { key: unders, item: items.get(unders) };
+
+  // 4) last resort: match by label containing dash code
+  const dash = String(code);
+  for (const [k, v] of items.entries()) {
+    const label = String(v?.label || '');
+    if (label.includes(dash)) return { key: k, item: v };
+  }
+
+  return null;
+}
+
+// ✅ costs now ALWAYS work
+function calcScheduleCost(schedule, priceDoc, areaHa = 1) {
   const rows = [];
   let total = 0;
 
   const add = (phase, arr = []) => {
     for (const x of arr) {
-      const item = priceDoc.items.get(x.code.replace(/-/g, '_'));
-      if (!item) continue;
+      const bags = Number(x.bags || 0) * Number(areaHa || 1);
 
-      const subtotal = x.bags * item.pricePerBag;
+      const resolved = resolvePriceItem(priceDoc, x.code);
+      const item = resolved?.item;
+
+      const pricePerBag = item ? Number(item.pricePerBag || 0) : 0;
+      const subtotal = bags * pricePerBag;
+
       total += subtotal;
 
       rows.push({
         phase,
-        code: x.code,
-        bags: x.bags,
-        pricePerBag: item.pricePerBag,
-        subtotal,
+        code: String(x.code),
+        key: resolved?.key || null,          // ✅ helpful for debugging
+        label: item?.label || String(x.code), // ✅ show readable name
+        bags,
+        pricePerBag: item ? pricePerBag : null,
+        subtotal: item ? subtotal : null,
       });
     }
   };
@@ -29,7 +87,7 @@ const calcScheduleCost = (schedule, priceDoc) => {
   add('TOPDRESS', schedule.topdress60DBH);
 
   return { currency: priceDoc.currency, rows, total };
-};
+}
 
 // ---------- alternative schedules ----------
 const PLAN_LIBRARY = {
@@ -70,7 +128,7 @@ const PLAN_LIBRARY = {
 // ---------- controller ----------
 exports.recommend = async (req, res) => {
   try {
-    const { nClass, pClass, kClass, areaHa = 1 } = req.body;
+    const { nClass, pClass, kClass, areaHa = 1 } = req.body || {};
 
     const N = nClass || 'L';
     const P = pClass || 'L';
@@ -79,7 +137,7 @@ exports.recommend = async (req, res) => {
 
     const priceDoc = await PriceSettings.ensureSeeded();
 
-    // --- DA PLAN (unchanged logic) ---
+    // --- DA PLAN ---
     const daSchedule = {
       basal: [
         { code: '0-0-60', bags: 2 },
@@ -89,7 +147,7 @@ exports.recommend = async (req, res) => {
       topdress60DBH: [{ code: '46-0-0', bags: 2 }],
     };
 
-    const daCost = calcScheduleCost(daSchedule, priceDoc);
+    const daCost = calcScheduleCost(daSchedule, priceDoc, areaHa);
 
     const daPlan = {
       id: 'DA_RULE',
@@ -101,10 +159,11 @@ exports.recommend = async (req, res) => {
       cost: daCost,
     };
 
-    // --- ALTERNATIVES ---
-    const rule = LMH_TABLE[npkClass];
-    const alt1Schedule = PLAN_LIBRARY[rule.alt1]();
-    const alt2Schedule = PLAN_LIBRARY[rule.alt2]();
+    // --- ALTERNATIVES (from table) ---
+    const rule = LMH_TABLE[npkClass] || null;
+
+    const alt1Schedule = rule?.alt1 && PLAN_LIBRARY[rule.alt1] ? PLAN_LIBRARY[rule.alt1]() : PLAN_LIBRARY.DAP_MOP_UREA();
+    const alt2Schedule = rule?.alt2 && PLAN_LIBRARY[rule.alt2] ? PLAN_LIBRARY[rule.alt2]() : PLAN_LIBRARY.DAP_MOP_AMMOSUL();
 
     const alt1 = {
       id: 'ALT_1',
@@ -113,7 +172,7 @@ exports.recommend = async (req, res) => {
       isDa: false,
       isCheapest: false,
       schedule: alt1Schedule,
-      cost: calcScheduleCost(alt1Schedule, priceDoc),
+      cost: calcScheduleCost(alt1Schedule, priceDoc, areaHa),
     };
 
     const alt2 = {
@@ -123,20 +182,24 @@ exports.recommend = async (req, res) => {
       isDa: false,
       isCheapest: false,
       schedule: alt2Schedule,
-      cost: calcScheduleCost(alt2Schedule, priceDoc),
+      cost: calcScheduleCost(alt2Schedule, priceDoc, areaHa),
     };
 
     const plans = [daPlan, alt1, alt2];
 
-    // --- sort cheapest ---
-    plans.sort((a, b) => a.cost.total - b.cost.total);
-    plans[0].isCheapest = true;
+    // sort cheapest (null totals go last)
+    plans.sort((a, b) => {
+      const ta = Number(a?.cost?.total ?? Number.POSITIVE_INFINITY);
+      const tb = Number(b?.cost?.total ?? Number.POSITIVE_INFINITY);
+      return ta - tb;
+    });
+    if (plans.length) plans[0].isCheapest = true;
 
     res.json({
       ok: true,
       crop: 'rice_hybrid',
       classified: { N, P, K, npkClass },
-      input: { areaHa },
+      input: { areaHa: Number(areaHa || 1) },
       nutrientRequirementKgHa: { N: 120, P: 60, K: 60 },
       plans,
       note: 'Returned 3 fertilizer plans (DA + 2 alternatives), sorted cheapest-first.',
