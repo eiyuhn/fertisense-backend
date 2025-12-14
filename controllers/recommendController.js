@@ -3,15 +3,25 @@ const PriceSettings = require('../models/PriceSettings');
 const LMH_TABLE = require('../utils/lmhTable');
 
 // ---------- helpers ----------
-function parseTriple(code) {
-  const m = String(code || '').match(/(\d{1,2})\s*-\s*(\d{1,2})\s*-\s*(\d{1,2})/);
-  if (!m) return null;
-  return { N: Number(m[1]), P: Number(m[2]), K: Number(m[3]) };
+
+// ✅ parse NPK from: "46-0-0", "46 – 0 – 0", "UREA_46_0_0", "NPK_14_14_14"
+function parseTripleAny(text) {
+  const s = String(text || '').toUpperCase();
+
+  // dash style
+  let m = s.match(/(\d{1,2})\s*[-–]\s*(\d{1,2})\s*[-–]\s*(\d{1,2})/);
+  if (m) return { N: Number(m[1]), P: Number(m[2]), K: Number(m[3]) };
+
+  // underscore style
+  m = s.match(/(\d{1,2})_(\d{1,2})_(\d{1,2})/);
+  if (m) return { N: Number(m[1]), P: Number(m[2]), K: Number(m[3]) };
+
+  return null;
 }
 
 // dash-code -> canonical key in PriceSettings.items
-function canonicalKeyFromDashCode(dashCode) {
-  const npk = parseTriple(dashCode);
+function canonicalKeyFromDashCode(code) {
+  const npk = parseTripleAny(code);
   if (!npk) return null;
 
   const { N, P, K } = npk;
@@ -31,53 +41,74 @@ function resolvePriceItem(priceDoc, code) {
   if (!priceDoc?.items) return null;
 
   const items = priceDoc.items; // Map
+  const raw = String(code || '');
 
   // 1) exact key
-  if (items.get(code)) return { key: code, item: items.get(code) };
+  if (items.get(raw)) return { key: raw, item: items.get(raw) };
 
   // 2) dash code -> canonical key
-  const canon = canonicalKeyFromDashCode(code);
+  const canon = canonicalKeyFromDashCode(raw);
   if (canon && items.get(canon)) return { key: canon, item: items.get(canon) };
 
-  // 3) try generic underscore key (rare)
-  const unders = String(code).replace(/-/g, '_').toUpperCase();
+  // 3) underscore variant of whatever user passed
+  const unders = raw.replace(/[-–]/g, '_').replace(/\s+/g, '_').toUpperCase();
   if (items.get(unders)) return { key: unders, item: items.get(unders) };
 
-  // 4) last resort: match by label containing dash code
-  const dash = String(code);
+  // 4) match by label containing the same dash code (e.g., "Urea (46-0-0)")
+  //    OR match by npk stored in item.npk
+  const want = parseTripleAny(raw);
+
   for (const [k, v] of items.entries()) {
-    const label = String(v?.label || '');
-    if (label.includes(dash)) return { key: k, item: v };
+    if (!v) continue;
+
+    const label = String(v.label || '');
+
+    // label contains raw code
+    if (label.includes(raw)) return { key: k, item: v };
+
+    // label has triple matching
+    const labelNpk = parseTripleAny(label);
+    if (want && labelNpk && labelNpk.N === want.N && labelNpk.P === want.P && labelNpk.K === want.K) {
+      return { key: k, item: v };
+    }
+
+    // stored npk matches
+    const npk = v.npk || {};
+    if (want && Number(npk.N) === want.N && Number(npk.P) === want.P && Number(npk.K) === want.K) {
+      return { key: k, item: v };
+    }
   }
 
   return null;
 }
 
-// ✅ costs now ALWAYS work
+// ✅ cost calc: NEVER treat missing as 0; subtotal=null if missing
 function calcScheduleCost(schedule, priceDoc, areaHa = 1) {
   const rows = [];
   let total = 0;
 
   const add = (phase, arr = []) => {
     for (const x of arr) {
-      const bags = Number(x.bags || 0) * Number(areaHa || 1);
+      const bags = Number(x?.bags || 0) * Number(areaHa || 1);
+      const code = String(x?.code || '');
 
-      const resolved = resolvePriceItem(priceDoc, x.code);
-      const item = resolved?.item;
+      const resolved = resolvePriceItem(priceDoc, code);
+      const item = resolved?.item || null;
 
-      const pricePerBag = item ? Number(item.pricePerBag || 0) : 0;
-      const subtotal = bags * pricePerBag;
+      const pricePerBag = item ? Number(item.pricePerBag || 0) : null;
+      const subtotal = pricePerBag == null ? null : bags * pricePerBag;
 
-      total += subtotal;
+      // ✅ only add if we really have a price
+      if (subtotal != null) total += subtotal;
 
       rows.push({
         phase,
-        code: String(x.code),
-        key: resolved?.key || null,          // ✅ helpful for debugging
-        label: item?.label || String(x.code), // ✅ show readable name
+        code,
+        key: resolved?.key || null,            // helpful for debugging
+        label: item?.label || code,            // readable
         bags,
-        pricePerBag: item ? pricePerBag : null,
-        subtotal: item ? subtotal : null,
+        pricePerBag,
+        subtotal,
       });
     }
   };
@@ -135,6 +166,8 @@ exports.recommend = async (req, res) => {
     const K = kClass || 'L';
     const npkClass = `${N}${P}${K}`;
 
+    // ✅ IMPORTANT: ensureSeeded must be the repaired+merged version
+    // that auto-adds missing DAP/MOP and fixes wrong Urea key.
     const priceDoc = await PriceSettings.ensureSeeded();
 
     // --- DA PLAN ---
@@ -147,8 +180,6 @@ exports.recommend = async (req, res) => {
       topdress60DBH: [{ code: '46-0-0', bags: 2 }],
     };
 
-    const daCost = calcScheduleCost(daSchedule, priceDoc, areaHa);
-
     const daPlan = {
       id: 'DA_RULE',
       title: 'Fertilizer Plan',
@@ -156,14 +187,17 @@ exports.recommend = async (req, res) => {
       isDa: true,
       isCheapest: false,
       schedule: daSchedule,
-      cost: daCost,
+      cost: calcScheduleCost(daSchedule, priceDoc, areaHa),
     };
 
-    // --- ALTERNATIVES (from table) ---
+    // --- ALTERNATIVES ---
     const rule = LMH_TABLE[npkClass] || null;
 
-    const alt1Schedule = rule?.alt1 && PLAN_LIBRARY[rule.alt1] ? PLAN_LIBRARY[rule.alt1]() : PLAN_LIBRARY.DAP_MOP_UREA();
-    const alt2Schedule = rule?.alt2 && PLAN_LIBRARY[rule.alt2] ? PLAN_LIBRARY[rule.alt2]() : PLAN_LIBRARY.DAP_MOP_AMMOSUL();
+    const alt1Schedule =
+      rule?.alt1 && PLAN_LIBRARY[rule.alt1] ? PLAN_LIBRARY[rule.alt1]() : PLAN_LIBRARY.DAP_MOP_UREA();
+
+    const alt2Schedule =
+      rule?.alt2 && PLAN_LIBRARY[rule.alt2] ? PLAN_LIBRARY[rule.alt2]() : PLAN_LIBRARY.DAP_MOP_AMMOSUL();
 
     const alt1 = {
       id: 'ALT_1',
@@ -187,12 +221,8 @@ exports.recommend = async (req, res) => {
 
     const plans = [daPlan, alt1, alt2];
 
-    // sort cheapest (null totals go last)
-    plans.sort((a, b) => {
-      const ta = Number(a?.cost?.total ?? Number.POSITIVE_INFINITY);
-      const tb = Number(b?.cost?.total ?? Number.POSITIVE_INFINITY);
-      return ta - tb;
-    });
+    // ✅ cheapest sort: all totals are numbers now (only real priced items are summed)
+    plans.sort((a, b) => Number(a?.cost?.total || 0) - Number(b?.cost?.total || 0));
     if (plans.length) plans[0].isCheapest = true;
 
     res.json({

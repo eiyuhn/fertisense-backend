@@ -7,10 +7,7 @@ const priceCtrl = require('../controllers/priceController');
 // Public: GET /api/prices
 router.get('/', priceCtrl.getPublicPrices);
 
-/**
- * Auth read:
- * any logged-in user can read canonical admin doc
- */
+// Authenticated read (any logged-in user)
 router.get('/admin', auth, priceCtrl.getAdminPrices);
 
 // Admin-only write
