@@ -42,12 +42,11 @@ app.get('/health', (_req, res) => {
 });
 
 /* --- routes --- */
-app.use('/api/auth', require('./routes/auth'));       // POST /api/auth/login etc.
-app.use('/api/prices', require('./routes/prices'));   // if you have prices
-app.use('/api/farmers', require('./routes/farmers')); // farmer + readings CRUD
-app.use('/api/recommend', require('./routes/recommend'));
+aapp.use('/api/auth', require('./routes/auth'));
+app.use('/api/prices', require('./routes/prices'));
+app.use('/api/farmers', require('./routes/farmers'));
 app.use('/api/readings', require('./routes/readings'));
-app.use('/api/users', require('./routes/users'));     // ✅ new user route
+app.use('/api/users', require('./routes/users'));
 app.use('/api/admin', require('./routes/admin'));
 
 /* --- 404 --- */
