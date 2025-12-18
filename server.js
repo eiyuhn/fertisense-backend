@@ -42,7 +42,7 @@ app.get('/health', (_req, res) => {
 });
 
 /* --- routes --- */
-aapp.use('/api/auth', require('./routes/auth'));
+app.use('/api/auth', require('./routes/auth'));
 app.use('/api/prices', require('./routes/prices'));
 app.use('/api/farmers', require('./routes/farmers'));
 app.use('/api/readings', require('./routes/readings'));
