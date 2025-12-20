@@ -17,6 +17,7 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.5.1",
     "multer": "^2.0.2",
+    "node-fetch": "^3.3.2",
     "sharp": "^0.34.4",
     "yet": "^0.1.0"
   },

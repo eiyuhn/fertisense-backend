@@ -48,6 +48,8 @@ app.use('/api/farmers', require('./routes/farmers'));
 app.use('/api/readings', require('./routes/readings'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/admin', require('./routes/admin'));
+app.use('/api/translate', require('./routes/translate'));
+
 
 /* --- 404 --- */
 app.use((req, res) => {
